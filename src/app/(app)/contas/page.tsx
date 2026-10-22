@@ -10,9 +10,33 @@ import { traduzirErro } from "@/lib/erros";
 
 type Conta = { id: string; email: string; nome: string; perfil: PerfilUtilizador; activo: boolean; colaborador_id: string | null };
 type Msg = { tipo: "ok" | "erro"; texto: string } | null;
+type Credenciais = { nome: string; email: string; password: string };
 
 const seletor =
   "rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
+const campo =
+  "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
+const btn = "rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:bg-slate-300";
+
+function gerarPassword(): string {
+  const alfabeto = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => alfabeto[b % alfabeto.length]).join("");
+}
+
+async function chamarApi(corpo: Record<string, unknown>): Promise<void> {
+  const { data } = await getSupabase().auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Sessão expirada. Entre de novo.");
+  const r = await fetch("/api/contas", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(corpo),
+  });
+  const j = (await r.json().catch(() => ({}))) as { erro?: string };
+  if (!r.ok) throw new Error(j.erro ?? "Não foi possível concluir a operação.");
+}
 
 export default function ContasPage() {
   const { perfil, userId } = useAuth();
@@ -22,6 +46,10 @@ export default function ContasPage() {
   const [msg, setMsg] = useState<Msg>(null);
   const [escolha, setEscolha] = useState<Record<string, string>>({});
   const [ocupado, setOcupado] = useState(false);
+  const [form, setForm] = useState({ colaborador: "", email: "", password: "" });
+  const [criada, setCriada] = useState<Credenciais | null>(null);
+  const [repor, setRepor] = useState<{ id: string; email: string; password: string } | null>(null);
+  const [copiado, setCopiado] = useState(false);
 
   const carregar = useCallback(async () => {
     const { data, error } = await getSupabase()
@@ -53,30 +81,122 @@ export default function ContasPage() {
     }
   }
 
+  async function criarConta(e: React.FormEvent) {
+    e.preventDefault();
+    if (ocupado) return;
+    if (!form.colaborador) return setMsg({ tipo: "erro", texto: "Seleccione o colaborador." });
+    if (!form.email.trim()) return setMsg({ tipo: "erro", texto: "Indique o email." });
+    if (form.password.length < 8) return setMsg({ tipo: "erro", texto: "A palavra-passe deve ter pelo menos 8 caracteres." });
+    setOcupado(true);
+    setMsg(null);
+    setCriada(null);
+    try {
+      await chamarApi({ accao: "criar", colaborador_id: form.colaborador, email: form.email, password: form.password });
+      setCriada({ nome: co.obter(form.colaborador)?.nome ?? "", email: form.email.trim().toLowerCase(), password: form.password });
+      setForm({ colaborador: "", email: "", password: "" });
+      await carregar();
+    } catch (err) {
+      setMsg({ tipo: "erro", texto: err instanceof Error ? err.message : "Erro." });
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function reporPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!repor || ocupado) return;
+    if (repor.password.length < 8) return setMsg({ tipo: "erro", texto: "A palavra-passe deve ter pelo menos 8 caracteres." });
+    setOcupado(true);
+    setMsg(null);
+    setCriada(null);
+    try {
+      await chamarApi({ accao: "repor", user_id: repor.id, password: repor.password });
+      setCriada({ nome: "Nova palavra-passe", email: repor.email, password: repor.password });
+      setRepor(null);
+    } catch (err) {
+      setMsg({ tipo: "erro", texto: err instanceof Error ? err.message : "Erro." });
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function copiar(c: Credenciais) {
+    try {
+      await navigator.clipboard.writeText(`Galedos Gestão\nEmail: ${c.email}\nPalavra-passe: ${c.password}`);
+      setCopiado(true);
+    } catch {
+      setCopiado(false);
+    }
+  }
+
   if (perfil.perfil !== "administrador") return <p className="text-sm text-slate-500">Sem permissão.</p>;
   if (!carregado || !co.carregado) return <p className="text-sm text-slate-500">A carregar...</p>;
 
   const nomeColab = (id: string | null) => (id ? co.obter(id)?.nome ?? id : "—");
   const ligados = new Set(contas.map((c) => c.colaborador_id).filter((x): x is string => !!x));
+  const semConta = co.colaboradores.filter((x) => x.estado === "Activo" && !ligados.has(x.id));
 
   return (
     <>
-      <PageHeader title="Contas de Acesso" description="Ligue as contas de login aos colaboradores para eles usarem a área Hoje, Presenças e Meus Ganhos." />
+      <PageHeader title="Contas de Acesso" description="Crie a conta de login de cada colaborador para ele usar a área Hoje, Presenças e Meus Ganhos no telemóvel." />
 
       {msg && (
         <div className={`mb-4 rounded-lg border p-3 text-sm ${msg.tipo === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>{msg.texto}</div>
       )}
 
-      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-700 shadow-sm">
-        <h2 className="mb-2 font-semibold text-slate-900">Como dar acesso a um colaborador</h2>
-        <ol className="list-decimal space-y-1 pl-5">
-          <li>No painel do Supabase, em <strong>Authentication &gt; Users &gt; Add user &gt; Create new user</strong>, crie a conta com o email do colaborador, uma palavra-passe e <strong>Auto Confirm User</strong> marcado.</li>
-          <li>Volte aqui e clique em <strong>Actualizar</strong> (ou recarregue a página). A conta aparece abaixo com o perfil <em>Operacional</em>.</li>
-          <li>Escolha o colaborador e clique em <strong>Ligar</strong>.</li>
-          <li>Entregue o email e a palavra-passe ao colaborador, que deve entrar no telemóvel.</li>
-        </ol>
-        <button onClick={carregar} className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Actualizar lista</button>
-      </div>
+      {criada && (
+        <div className="mb-6 rounded-xl border border-emerald-300 bg-emerald-50 p-5 text-sm text-emerald-900">
+          <p className="font-semibold">{criada.nome === "Nova palavra-passe" ? "Palavra-passe alterada." : `Conta criada para ${criada.nome}.`} Entregue estes dados ao colaborador:</p>
+          <p className="mt-2">Email: <strong>{criada.email}</strong></p>
+          <p>Palavra-passe: <strong>{criada.password}</strong></p>
+          <p className="mt-2 text-xs">Esta palavra-passe só aparece agora. Depois de sair desta página já não é possível vê-la (só repor outra).</p>
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => copiar(criada)} className={btn}>{copiado ? "Copiado" : "Copiar dados"}</button>
+            <button onClick={() => { setCriada(null); setCopiado(false); }} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700">Fechar</button>
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={criarConta} noValidate className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-1 font-semibold text-slate-900">Criar conta de colaborador</h2>
+        <p className="mb-3 text-xs text-slate-500">Só aparecem colaboradores activos que ainda não têm conta. Cadastre primeiro o colaborador em Colaboradores.</p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <label className="text-sm font-medium text-slate-700">Colaborador *</label>
+            <select className={campo} value={form.colaborador} onChange={(e) => setForm({ ...form, colaborador: e.target.value })}>
+              <option value="">Seleccione</option>
+              {semConta.map((x) => <option key={x.id} value={x.id}>{x.codigo} · {x.nome}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-slate-700">Email de acesso *</label>
+            <input type="email" autoComplete="off" className={campo} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-slate-700">Palavra-passe * (mín. 8)</label>
+            <div className="flex gap-2">
+              <input autoComplete="off" className={campo} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              <button type="button" onClick={() => setForm({ ...form, password: gerarPassword() })} className="mt-1 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">Gerar</button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end"><button type="submit" disabled={ocupado || semConta.length === 0} className={btn}>Criar conta</button></div>
+        {semConta.length === 0 && <p className="mt-2 text-right text-xs text-slate-500">Todos os colaboradores activos já têm conta.</p>}
+      </form>
+
+      {repor && (
+        <form onSubmit={reporPassword} noValidate className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-5">
+          <h2 className="mb-2 font-semibold text-slate-900">Nova palavra-passe para {repor.email}</h2>
+          <div className="flex flex-wrap gap-2">
+            <input autoComplete="off" className={campo + " max-w-xs"} value={repor.password} onChange={(e) => setRepor({ ...repor, password: e.target.value })} />
+            <button type="button" onClick={() => setRepor({ ...repor, password: gerarPassword() })} className="mt-1 rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-700">Gerar</button>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button type="submit" disabled={ocupado} className={btn}>Guardar</button>
+            <button type="button" onClick={() => setRepor(null)} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700">Cancelar</button>
+          </div>
+        </form>
+      )}
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
@@ -124,8 +244,12 @@ export default function ContasPage() {
                     </td>
                     <td className="px-5 py-3"><Etiqueta texto={c.activo ? "Activa" : "Desactivada"} tom={c.activo ? "verde" : "cinza"} /></td>
                     <td className="whitespace-nowrap px-5 py-3">
-                      <button disabled={eu || ocupado} onClick={() => chamar("alternar_conta_activa", { p_user: c.id }, c.activo ? "Conta desactivada." : "Conta activada.")}
-                        className="text-sm font-medium text-slate-600 hover:underline disabled:text-slate-300">{c.activo ? "Desactivar" : "Activar"}</button>
+                      <div className="flex gap-4">
+                        <button disabled={ocupado} onClick={() => { setCriada(null); setRepor({ id: c.id, email: c.email, password: gerarPassword() }); }}
+                          className="text-sm font-medium text-brand-700 hover:underline disabled:text-slate-300">Nova palavra-passe</button>
+                        <button disabled={eu || ocupado} onClick={() => chamar("alternar_conta_activa", { p_user: c.id }, c.activo ? "Conta desactivada." : "Conta activada.")}
+                          className="text-sm font-medium text-slate-600 hover:underline disabled:text-slate-300">{c.activo ? "Desactivar" : "Activar"}</button>
+                      </div>
                     </td>
                   </tr>
                 );
