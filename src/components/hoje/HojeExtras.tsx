@@ -9,6 +9,7 @@ import { traduzirErro } from "@/lib/erros";
 import { reduzirImagem } from "@/lib/imagem";
 import { dataLuanda } from "@/lib/presenca";
 import { formatData } from "@/lib/format";
+import AtivarNotificacoes from "@/components/pwa/AtivarNotificacoes";
 
 type Aviso = { id: string; titulo: string; texto: string; data: string; lido: boolean };
 type Equip = { id: string; codigo: string; nome: string; categoria: string; estado: string; data_aquisicao: string | null };
@@ -119,6 +120,8 @@ export default function HojeExtras({ parte }: { parte: "topo" | "fundo" }) {
   return (
     <>
       {erro && <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{erro}</p>}
+
+      <AtivarNotificacoes />
 
       {naoLidos.length > 0 && (
         <section className="mb-6 space-y-3">

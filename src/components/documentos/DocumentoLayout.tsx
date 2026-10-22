@@ -26,7 +26,8 @@ export default function DocumentoLayout({
     <div className="mx-auto max-w-3xl rounded-xl border border-slate-200 bg-white p-8 shadow-sm print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
       <div className="flex items-start justify-between gap-4 border-b-2 border-slate-800 pb-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-brand-600 text-2xl font-bold text-white">{empresa.nome.charAt(0).toUpperCase()}</div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt={empresa.nome} className="h-14 w-auto" />
           <div>
             <p className="text-lg font-semibold text-slate-900">{empresa.nome}</p>
             {empresa.nif && <p className="text-xs text-slate-600">NIF: {empresa.nif}</p>}

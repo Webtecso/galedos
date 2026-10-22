@@ -114,7 +114,8 @@ export default function ContaPage() {
               <li>as horas de entrada, saída e pausas, e o início e o fim de cada serviço (a hora é a do servidor);</li>
               <li>a sua localização, apenas no momento em que marca entrada, saída, chegada, início e fim. Não há rastreio contínuo;</li>
               <li>fotografias do trabalho (antes e depois) e, se quiser, uma selfie à entrada;</li>
-              <li>as suas remunerações, pagamentos, pedidos e ausências.</li>
+              <li>as suas remunerações, pagamentos, pedidos e ausências;</li>
+              <li>se activar as notificações, os dados técnicos do seu telemóvel necessários para lhe enviar avisos.</li>
             </ul>
             <p>Estes dados servem para controlar a presença, provar os serviços prestados e calcular as remunerações.</p>
             <p>Só a administração e a gestão os consultam, e você vê os seus próprios dados. Não são partilhados com terceiros.</p>

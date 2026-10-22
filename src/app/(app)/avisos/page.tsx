@@ -65,10 +65,39 @@ export default function AvisosPage() {
 
   async function publicar(e: React.FormEvent) {
     e.preventDefault();
+    if (ocupado) return;
     if (form.titulo.trim().length < 3) return setMsg({ tipo: "erro", texto: "Escreva o título do aviso." });
     if (form.texto.trim().length < 3) return setMsg({ tipo: "erro", texto: "Escreva o texto do aviso." });
-    const ok = await chamar("criar_aviso", { p_titulo: form.titulo, p_texto: form.texto, p_colaborador: form.para || null }, "Aviso publicado.");
-    if (ok) setForm({ titulo: "", texto: "", para: "" });
+    setOcupado(true);
+    setMsg(null);
+    try {
+      const sb = getSupabase();
+      const { data, error } = await sb.rpc("criar_aviso", { p_titulo: form.titulo, p_texto: form.texto, p_colaborador: form.para || null });
+      if (error) {
+        setMsg({ tipo: "erro", texto: traduzirErro(error) });
+        return;
+      }
+      let extra = "";
+      try {
+        const { data: sess } = await sb.auth.getSession();
+        const r = await fetch("/api/push/enviar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${sess.session?.access_token ?? ""}` },
+          body: JSON.stringify({ aviso_id: String(data) }),
+        });
+        const j = (await r.json().catch(() => ({}))) as { enviados?: number; erro?: string };
+        extra = r.ok
+          ? ` Notificação enviada a ${j.enviados ?? 0} telemóvel(is).`
+          : ` A notificação push não foi enviada (${j.erro ?? "erro"}), mas o aviso aparece no ecrã Hoje.`;
+      } catch {
+        extra = " A notificação push não foi enviada, mas o aviso aparece no ecrã Hoje.";
+      }
+      setMsg({ tipo: "ok", texto: "Aviso publicado." + extra });
+      setForm({ titulo: "", texto: "", para: "" });
+      await carregar();
+    } finally {
+      setOcupado(false);
+    }
   }
 
   if (!pronto || !co.carregado) return <p className="text-sm text-slate-500">A carregar...</p>;
@@ -77,7 +106,7 @@ export default function AvisosPage() {
 
   return (
     <>
-      <PageHeader title="Avisos" description="Mensagens para os colaboradores. Aparecem no ecrã Hoje até serem marcadas como lidas." />
+      <PageHeader title="Avisos" description="Mensagens para os colaboradores. Aparecem no ecrã Hoje e, se tiverem as notificações activas, no telemóvel." />
 
       {msg && (
         <div className={`mb-4 rounded-lg border p-3 text-sm ${msg.tipo === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>{msg.texto}</div>
@@ -102,7 +131,7 @@ export default function AvisosPage() {
             <textarea className={campo} rows={3} value={form.texto} onChange={(e) => setForm({ ...form, texto: e.target.value })} />
           </div>
         </div>
-        <div className="mt-4 flex justify-end"><button type="submit" disabled={ocupado} className={btn}>Publicar aviso</button></div>
+        <div className="mt-4 flex justify-end"><button type="submit" disabled={ocupado} className={btn}>{ocupado ? "A publicar..." : "Publicar aviso"}</button></div>
       </form>
 
       <div className="space-y-3">

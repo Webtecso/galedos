@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
   title: "Galedos Gestão",
   description: "Aplicação de gestão empresarial do Grupo Galedos",
-  icons: { apple: "/icone/180" },
+  icons: { apple: "/icons/apple-180.png" },
   appleWebApp: { capable: true, title: "Galedos", statusBarStyle: "default" },
   formatDetection: { telephone: false },
 };

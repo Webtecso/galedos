@@ -17,16 +17,18 @@ const destaques = [
 
 export default function LoginPage() {
   const router = useRouter();
+  const [modo, setModo] = useState<"entrar" | "recuperar">("entrar");
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [ver, setVer] = useState(false);
   const [erro, setErro] = useState("");
+  const [info, setInfo] = useState("");
   const [aEntrar, setAEntrar] = useState(false);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("motivo") === "sem-acesso") {
-      setErro("Esta conta não tem acesso à aplicação. Contacte a administração.");
-    }
+    const motivo = new URLSearchParams(window.location.search).get("motivo");
+    if (motivo === "sem-acesso") setErro("Esta conta não tem acesso à aplicação. Contacte a administração.");
+    if (motivo === "senha-alterada") setInfo("Palavra-passe alterada. Já pode entrar com a nova.");
     getSupabase().auth.getSession().then(({ data }: { data: { session: unknown } }) => {
       if (data.session) router.replace("/painel");
     });
@@ -41,6 +43,7 @@ export default function LoginPage() {
     }
     setAEntrar(true);
     setErro("");
+    setInfo("");
     const { error } = await getSupabase().auth.signInWithPassword({ email: email.trim(), password: senha });
     if (error) {
       setErro(error.message.toLowerCase().includes("invalid") ? "Email ou palavra-passe incorrectos." : "Não foi possível entrar: " + error.message);
@@ -48,6 +51,25 @@ export default function LoginPage() {
       return;
     }
     router.push("/painel");
+  }
+
+  async function recuperar(e: React.FormEvent) {
+    e.preventDefault();
+    if (aEntrar) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setErro("Indique o seu email.");
+      return;
+    }
+    setAEntrar(true);
+    setErro("");
+    setInfo("");
+    const { error } = await getSupabase().auth.resetPasswordForEmail(email.trim(), { redirectTo: `${window.location.origin}/recuperar` });
+    setAEntrar(false);
+    if (error) {
+      setErro("Não foi possível enviar agora. Tente mais tarde ou peça à administração para repor a palavra-passe.");
+      return;
+    }
+    setInfo("Se o email estiver registado, receberá um link em poucos minutos. Verifique também a pasta de spam.");
   }
 
   return (
@@ -79,10 +101,12 @@ export default function LoginPage() {
         </div>
 
         <div className="mx-auto w-full max-w-sm rounded-2xl bg-white p-8 shadow-2xl">
-          <h2 className="text-2xl font-semibold text-slate-900">Iniciar sessão</h2>
-          <p className="mt-1 text-sm text-slate-500">Aceda à sua conta para continuar.</p>
+          <h2 className="text-2xl font-semibold text-slate-900">{modo === "entrar" ? "Iniciar sessão" : "Recuperar palavra-passe"}</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            {modo === "entrar" ? "Aceda à sua conta para continuar." : "Indique o email da sua conta. Enviamos um link para definir uma nova palavra-passe."}
+          </p>
 
-          <form onSubmit={entrar} noValidate className="mt-6 space-y-4">
+          <form onSubmit={modo === "entrar" ? entrar : recuperar} noValidate className="mt-6 space-y-4">
             <div>
               <label className="text-sm font-medium text-slate-700">E-mail</label>
               <div className="relative mt-1">
@@ -90,21 +114,32 @@ export default function LoginPage() {
                 <input className={campo} type="email" autoComplete="email" placeholder="exemplo@grupo-galedos.com" value={email} onChange={(e) => setEmail(e.target.value)} />
               </div>
             </div>
-            <div>
-              <label className="text-sm font-medium text-slate-700">Palavra-passe</label>
-              <div className="relative mt-1">
-                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input className={campo} type={ver ? "text" : "password"} autoComplete="current-password" placeholder="Introduza a sua palavra-passe" value={senha} onChange={(e) => setSenha(e.target.value)} />
-                <button type="button" onClick={() => setVer(!ver)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label={ver ? "Esconder palavra-passe" : "Mostrar palavra-passe"}>
-                  {ver ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+            {modo === "entrar" && (
+              <div>
+                <label className="text-sm font-medium text-slate-700">Palavra-passe</label>
+                <div className="relative mt-1">
+                  <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input className={campo} type={ver ? "text" : "password"} autoComplete="current-password" placeholder="Introduza a sua palavra-passe" value={senha} onChange={(e) => setSenha(e.target.value)} />
+                  <button type="button" onClick={() => setVer(!ver)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label={ver ? "Esconder palavra-passe" : "Mostrar palavra-passe"}>
+                    {ver ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
             {erro && <p className="text-sm text-red-600">{erro}</p>}
+            {info && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{info}</p>}
             <button type="submit" disabled={aEntrar} className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:bg-slate-300">
-              {aEntrar ? "A entrar..." : "Entrar"}
+              {modo === "entrar" ? (aEntrar ? "A entrar..." : "Entrar") : aEntrar ? "A enviar..." : "Enviar link"}
             </button>
           </form>
+
+          <button
+            type="button"
+            onClick={() => { setModo(modo === "entrar" ? "recuperar" : "entrar"); setErro(""); setInfo(""); }}
+            className="mt-4 w-full text-center text-sm font-medium text-brand-700 hover:underline"
+          >
+            {modo === "entrar" ? "Esqueci a palavra-passe" : "Voltar ao início de sessão"}
+          </button>
 
           <p className="mt-6 text-center text-xs text-slate-500">
             Ainda não tem uma conta? <span className="font-medium text-brand-700">Contacte o administrador</span>
