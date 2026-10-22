@@ -60,8 +60,8 @@ export default function LoginPage() {
     >
       <div className="mx-auto grid min-h-screen max-w-6xl items-center gap-10 p-6 lg:grid-cols-2">
         <div className="text-white">
-          <Logo altura={64} />
-          <h1 className="mt-10 text-4xl font-semibold leading-tight">
+          <Logo altura={96} classe="h-24 w-auto sm:h-28 lg:h-40" />
+          <h1 className="mt-6 text-3xl font-semibold leading-tight lg:mt-10 lg:text-4xl">
             Bem-vindo ao<br />
             <span className="text-brand-200">Galedos Gestão</span>
           </h1>

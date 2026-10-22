@@ -20,7 +20,7 @@ function permitido(perfil: "administrador" | "gestao" | "operacional", href: str
 function Brand() {
   return (
     <div className="flex h-16 items-center border-b border-white/10 px-5">
-      <Logo altura={40} />
+      <Logo altura={48} />
     </div>
   );
 }

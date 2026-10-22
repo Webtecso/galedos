@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 
-export default function Logo({ altura = 40, mostrarTexto = true }: { altura?: number; mostrarTexto?: boolean }) {
+export default function Logo({
+  altura = 40,
+  mostrarTexto = true,
+  classe,
+}: {
+  altura?: number;
+  mostrarTexto?: boolean;
+  classe?: string;
+}) {
   const [estado, setEstado] = useState<"a-testar" | "ok" | "falhou">("a-testar");
 
   useEffect(() => {
@@ -13,7 +21,10 @@ export default function Logo({ altura = 40, mostrarTexto = true }: { altura?: nu
   }, []);
 
   if (estado === "ok") {
-    return (
+    return classe ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src="/logo.png" alt="Grupo Galedos" className={classe} />
+    ) : (
       // eslint-disable-next-line @next/next/no-img-element
       <img src="/logo.png" alt="Grupo Galedos" style={{ height: altura, width: "auto" }} />
     );
