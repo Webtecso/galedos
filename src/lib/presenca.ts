@@ -30,6 +30,9 @@ export type Execucao = {
   inicio_lng: number | null;
   fim_lat: number | null;
   fim_lng: number | null;
+  chegada_dist_m: number | null;
+  inicio_dist_m: number | null;
+  fim_dist_m: number | null;
   observacoes: string;
   motivo_correccao: string;
   servicos?: { codigo: string; tipo_servico: string; duracao_min: number } | null;
@@ -40,6 +43,7 @@ export type ConfigPresenca = {
   hora_saida: string;
   tolerancia_min: number;
   janela_inicio_min: number;
+  distancia_max_m: number;
 };
 
 export function dataLuanda(iso: string): string {

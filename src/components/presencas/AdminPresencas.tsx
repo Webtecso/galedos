@@ -17,6 +17,7 @@ import {
   paraISO, paraMinutosDia, proximoMes, type ConfigPresenca, type Execucao, type Presenca,
 } from "@/lib/presenca";
 import { formatData, formatPeriodo } from "@/lib/format";
+import DistanciaConfig from "./DistanciaConfig";
 
 type Aba = "agora" | "registos" | "mapa" | "servicos" | "horario";
 type Msg = { tipo: "ok" | "erro"; texto: string } | null;
@@ -304,6 +305,14 @@ export default function AdminPresencas() {
             <StatCard label="Alertas" value={String(semEntrada.length + comAtraso.length + esquecidas.length + acimaDoTempo.length)} icon={AlertTriangle} tom="vermelho" />
           </div>
 
+          {cfg && abertas.some((x) => x.inicio_dist_m != null && x.inicio_dist_m > cfg.distancia_max_m) && (
+            <div className="mb-6 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              {abertas.filter((x) => x.inicio_dist_m != null && x.inicio_dist_m > cfg.distancia_max_m).map((x) => (
+                <p key={"d" + x.id}>Início longe do local: <strong>{nome(x.colaborador_id)}</strong> em {x.servicos?.codigo} ({x.inicio_dist_m} m do cliente).</p>
+              ))}
+            </div>
+          )}
+
           {(semEntrada.length > 0 || comAtraso.length > 0 || esquecidas.length > 0 || acimaDoTempo.length > 0) && (
             <div className="mb-6 space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
               {semEntrada.map((c) => <p key={"s" + c.id}>Sem entrada registada: <strong>{c.nome}</strong> (tem serviço hoje).</p>)}
@@ -495,6 +504,7 @@ export default function AdminPresencas() {
                     <th className="px-5 py-3 font-medium">Real</th>
                     <th className="px-5 py-3 font-medium">Estimado</th>
                     <th className="px-5 py-3 font-medium">Diferença</th>
+                    <th className="px-5 py-3 font-medium">Local</th>
                     <th className="px-5 py-3 font-medium">Notas</th>
                     <th className="px-5 py-3 font-medium">Acções</th>
                   </tr>
@@ -514,6 +524,7 @@ export default function AdminPresencas() {
                         <td className="px-5 py-3 font-medium">{formatMin(real)}</td>
                         <td className="px-5 py-3">{formatMin(est)}</td>
                         <td className={`whitespace-nowrap px-5 py-3 ${dif > 0 ? "text-amber-700" : "text-emerald-700"}`}>{dif > 0 ? "+" : ""}{dif} min</td>
+                        <td className="px-5 py-3 text-xs">{x.inicio_dist_m == null ? <Etiqueta texto="Sem distância" tom="cinza" /> : cfg && x.inicio_dist_m > cfg.distancia_max_m ? <Etiqueta texto={`Longe: ${x.inicio_dist_m} m`} tom="ambar" /> : <span>{x.inicio_dist_m} m</span>}</td>
                         <td className="px-5 py-3 text-xs text-slate-600">{x.observacoes}{x.motivo_correccao && <span className="block text-slate-500">Corrigido: {x.motivo_correccao}</span>}</td>
                         <td className="whitespace-nowrap px-5 py-3">
                           {eAdmin && (
@@ -531,6 +542,8 @@ export default function AdminPresencas() {
           </div>
         </>
       )}
+
+      {aba === "horario" && eAdmin && <div className="mb-6 max-w-2xl"><DistanciaConfig /></div>}
 
       {aba === "horario" && eAdmin && (
         <form onSubmit={guardarHorario} noValidate className="max-w-2xl rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

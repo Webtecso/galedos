@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Users, Sparkles, CalendarDays, UserCog, Wallet,
   Landmark, Boxes, FileText, BarChart3, AlertTriangle, Settings, LogOut,
-  ClipboardCheck, Clock, HandCoins, KeyRound,
+  ClipboardCheck, Clock, HandCoins, KeyRound, Inbox,
   type LucideIcon,
 } from "lucide-react";
 
@@ -16,6 +16,7 @@ export const navItems: NavItem[] = [
   { label: "Colaboradores", href: "/colaboradores", icon: UserCog },
   { label: "Presenças", href: "/presencas", icon: Clock },
   { label: "Meus Ganhos", href: "/meus-ganhos", icon: HandCoins },
+  { label: "Pedidos", href: "/pedidos", icon: Inbox },
   { label: "Remunerações", href: "/remuneracoes", icon: Wallet },
   { label: "Financeiro", href: "/financas", icon: Landmark },
   { label: "Stock e Equipamentos", href: "/stock", icon: Boxes },

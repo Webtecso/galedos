@@ -12,6 +12,7 @@ type Linha = {
   id: string; codigo: string; nome: string; tipo: Cliente["tipo"]; telefone: string; email: string;
   endereco: string; localizacao: string; nif: string; data_registo: string; observacoes: string;
   estado: Cliente["estado"];
+  latitude: number | null; longitude: number | null;
 };
 
 function deLinha(l: Linha): Cliente {
@@ -19,6 +20,7 @@ function deLinha(l: Linha): Cliente {
     id: l.id, codigo: l.codigo, nome: l.nome, tipo: l.tipo, telefone: l.telefone, email: l.email,
     endereco: l.endereco, localizacao: l.localizacao, nif: l.nif, dataRegisto: l.data_registo,
     observacoes: l.observacoes, estado: l.estado,
+    latitude: l.latitude == null ? null : Number(l.latitude), longitude: l.longitude == null ? null : Number(l.longitude),
   };
 }
 
@@ -26,6 +28,7 @@ function paraLinha(d: ClienteDados) {
   return {
     nome: d.nome, tipo: d.tipo, telefone: d.telefone, email: d.email, endereco: d.endereco,
     localizacao: d.localizacao, nif: d.nif, observacoes: d.observacoes, estado: d.estado,
+    latitude: d.latitude ?? null, longitude: d.longitude ?? null,
   };
 }
 

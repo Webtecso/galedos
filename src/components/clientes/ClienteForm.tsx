@@ -4,16 +4,19 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Cliente } from "@/lib/types";
 import type { ClienteDados } from "./ClientesProvider";
+import { MapPin } from "lucide-react";
+import { mapaUrl, obterPosicao } from "@/lib/presenca";
 
 const vazio: ClienteDados = {
   nome: "", tipo: "Particular", telefone: "", email: "", endereco: "",
-  localizacao: "", nif: "", observacoes: "", estado: "Activo",
+  localizacao: "", nif: "", observacoes: "", estado: "Activo", latitude: null, longitude: null,
 };
 
 function extrair(c: Cliente): ClienteDados {
   return {
     nome: c.nome, tipo: c.tipo, telefone: c.telefone, email: c.email, endereco: c.endereco,
     localizacao: c.localizacao, nif: c.nif, observacoes: c.observacoes, estado: c.estado,
+    latitude: c.latitude ?? null, longitude: c.longitude ?? null,
   };
 }
 
@@ -33,6 +36,21 @@ export default function ClienteForm({
 }) {
   const [dados, setDados] = useState<ClienteDados>(inicial ? extrair(inicial) : vazio);
   const [erros, setErros] = useState<Record<string, string>>({});
+  const [aObter, setAObter] = useState(false);
+  const [msgLoc, setMsgLoc] = useState("");
+
+  async function usarLocalizacao() {
+    setAObter(true);
+    setMsgLoc("");
+    const p = await obterPosicao();
+    setAObter(false);
+    if (p.lat === null || p.lng === null) {
+      setMsgLoc("Não foi possível obter a localização. Permita o acesso à localização no navegador e tente de novo.");
+      return;
+    }
+    setDados((d) => ({ ...d, latitude: p.lat, longitude: p.lng }));
+    setMsgLoc("Localização preenchida. Clique em guardar para a gravar.");
+  }
 
   function mudar<K extends keyof ClienteDados>(chave: K, valor: ClienteDados[K]) {
     setDados((d) => ({ ...d, [chave]: valor }));
@@ -116,6 +134,23 @@ export default function ClienteForm({
         <div className="sm:col-span-2">
           <label className="text-sm font-medium text-slate-700">Localização ou referência geográfica</label>
           <input className={campo} placeholder="Ex.: Talatona, perto do Shopping" value={dados.localizacao} onChange={(e) => mudar("localizacao", e.target.value)} />
+        </div>
+
+        <div className="sm:col-span-2">
+          <label className="text-sm font-medium text-slate-700">Coordenadas do local</label>
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            <button type="button" onClick={usarLocalizacao} disabled={aObter} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              <MapPin className="h-4 w-4" /> {aObter ? "A obter..." : "Usar a minha localização actual"}
+            </button>
+            {dados.latitude != null && dados.longitude != null && (
+              <>
+                <a href={mapaUrl(dados.latitude, dados.longitude)} target="_blank" rel="noopener noreferrer" className="text-sm text-brand-700 hover:underline">{dados.latitude}, {dados.longitude} (ver mapa)</a>
+                <button type="button" onClick={() => setDados((d) => ({ ...d, latitude: null, longitude: null }))} className="text-sm text-red-700 hover:underline">Limpar</button>
+              </>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">Use o botão quando estiver no local do cliente. Serve para assinalar, sem bloquear, quando um serviço é iniciado longe do local.</p>
+          {msgLoc && <p className="mt-1 text-xs text-slate-600">{msgLoc}</p>}
         </div>
 
         <div className="sm:col-span-2">

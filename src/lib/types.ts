@@ -10,6 +10,8 @@ export type Cliente = {
   email: string;
   endereco: string;
   localizacao: string;
+  latitude?: number | null;
+  longitude?: number | null;
   nif: string;
   dataRegisto: string;
   observacoes: string;

@@ -12,6 +12,7 @@ const itens = navItems.filter((i) => i.href !== "/login");
 const rotulos = { administrador: "Administrador", gestao: "Gestão", operacional: "Operacional" } as const;
 
 function permitido(perfil: PerfilUtilizador, href: string, temColab: boolean): boolean {
+  if (href === "/pedidos") return perfil === "operacional" ? temColab : true;
   if (href === "/hoje" || href === "/meus-ganhos") return temColab;
   if (perfil === "administrador") return true;
   if (perfil === "gestao") return !["/configuracoes", "/remuneracoes", "/financas", "/contas"].includes(href);
