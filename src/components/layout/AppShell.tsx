@@ -1,20 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, Menu, Search, X } from "lucide-react";
 import { navItems } from "@/lib/nav";
-import { useAuth } from "@/components/auth/AuthProvider";
+import { useAuth, type PerfilUtilizador } from "@/components/auth/AuthProvider";
 import Logo from "@/components/ui/Logo";
 
 const itens = navItems.filter((i) => i.href !== "/login");
 const rotulos = { administrador: "Administrador", gestao: "Gestão", operacional: "Operacional" } as const;
 
-function permitido(perfil: "administrador" | "gestao" | "operacional", href: string): boolean {
+function permitido(perfil: PerfilUtilizador, href: string, temColab: boolean): boolean {
+  if (href === "/hoje" || href === "/meus-ganhos") return temColab;
   if (perfil === "administrador") return true;
-  if (perfil === "gestao") return !["/configuracoes", "/remuneracoes", "/financas"].includes(href);
-  return ["/painel", "/servicos", "/agenda", "/ocorrencias"].includes(href);
+  if (perfil === "gestao") return !["/configuracoes", "/remuneracoes", "/financas", "/contas"].includes(href);
+  return href === "/presencas";
 }
 
 function Brand() {
@@ -28,7 +29,8 @@ function Brand() {
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const { sair, perfil } = useAuth();
-  const visiveis = itens.filter((i) => permitido(perfil.perfil, i.href));
+  const temColab = !!perfil.colaboradorId;
+  const visiveis = itens.filter((i) => permitido(perfil.perfil, i.href, temColab));
   return (
     <>
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
@@ -73,16 +75,27 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const nome = perfil.nome || perfil.email;
   const operacional = perfil.perfil === "operacional";
-  const destino = operacional ? "/servicos" : "/clientes";
+  const temColab = !!perfil.colaboradorId;
+  const base = "/" + (pathname.split("/")[1] ?? "");
+  const bloqueado = !permitido(perfil.perfil, base, temColab);
+  const inicio = operacional ? (temColab ? "/hoje" : "/presencas") : "/painel";
+
+  useEffect(() => {
+    if (bloqueado) router.replace(inicio);
+  }, [bloqueado, inicio, router]);
 
   function pesquisar(e: React.FormEvent) {
     e.preventDefault();
     const q = termo.trim();
-    if (pathname === destino) {
+    if (pathname === "/clientes") {
       window.dispatchEvent(new CustomEvent("galedos:pesquisa", { detail: q }));
     } else {
-      router.push(`${destino}?q=${encodeURIComponent(q)}`);
+      router.push(`/clientes?q=${encodeURIComponent(q)}`);
     }
+  }
+
+  if (bloqueado) {
+    return <div className="p-8 text-sm text-slate-500">A redireccionar...</div>;
   }
 
   return (
@@ -118,15 +131,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <form onSubmit={pesquisar} className="relative w-full max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              value={termo}
-              onChange={(e) => setTermo(e.target.value)}
-              placeholder={operacional ? "Pesquisar serviços..." : "Pesquisar clientes..."}
-              className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
-            />
-          </form>
+          {!operacional && (
+            <form onSubmit={pesquisar} className="relative w-full max-w-md">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                value={termo}
+                onChange={(e) => setTermo(e.target.value)}
+                placeholder="Pesquisar clientes..."
+                className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100"
+              />
+            </form>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden text-right leading-tight sm:block">

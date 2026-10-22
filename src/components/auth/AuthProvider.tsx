@@ -5,9 +5,20 @@ import { useRouter } from "next/navigation";
 import { getSupabase } from "@/lib/supabase/client";
 
 export type PerfilUtilizador = "administrador" | "gestao" | "operacional";
-export type Perfil = { id: string; email: string; nome: string; perfil: PerfilUtilizador; activo: boolean };
+export type Perfil = {
+  id: string;
+  email: string;
+  nome: string;
+  perfil: PerfilUtilizador;
+  activo: boolean;
+  colaboradorId: string | null;
+};
 
 type Ctx = { userId: string; perfil: Perfil; sair: () => Promise<void> };
+
+type LinhaPerfil = {
+  id: string; email: string; nome: string; perfil: PerfilUtilizador; activo: boolean; colaborador_id: string | null;
+};
 
 const AuthContext = createContext<Ctx | null>(null);
 
@@ -29,7 +40,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const { data, error } = await sb
         .from("perfis")
-        .select("id,email,nome,perfil,activo")
+        .select("id,email,nome,perfil,activo,colaborador_id")
         .eq("id", userId)
         .maybeSingle();
       if (!activo) return;
@@ -38,10 +49,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         router.replace("/login?motivo=sem-acesso");
         return;
       }
-      setPerfil(data as Perfil);
+      const p = data as unknown as LinhaPerfil;
+      setPerfil({
+        id: p.id, email: p.email, nome: p.nome, perfil: p.perfil, activo: p.activo,
+        colaboradorId: p.colaborador_id,
+      });
     }
 
-    sb.auth.getSession().then(({ data }: { data: { session: { user: { id: string } } | null } }) => resolver(data.session?.user.id ?? null));
+    (async () => {
+      const { data } = await sb.auth.getSession();
+      await resolver(data.session?.user.id ?? null);
+    })();
 
     const { data: sub } = sb.auth.onAuthStateChange((evento: string) => {
       if (evento === "SIGNED_OUT") {
