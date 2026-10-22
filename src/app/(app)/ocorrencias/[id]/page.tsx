@@ -37,14 +37,14 @@ export default function DetalheOcorrenciaPage({ params }: { params: Promise<{ id
 
   const servico = servicos.find((s) => s.id === o.servicoId);
 
-  function mudar(novo: EstadoOcorrencia) {
-    const r = mudarEstado(o!.id, novo);
+  async function mudar(novo: EstadoOcorrencia) {
+    const r = await mudarEstado(o!.id, novo);
     setErro(r.ok ? "" : r.erro ?? "Erro.");
   }
 
-  function guardarMedida(e: React.FormEvent) {
+  async function guardarMedida(e: React.FormEvent) {
     e.preventDefault();
-    const r = adicionarMedida(o!.id, medida);
+    const r = await adicionarMedida(o!.id, medida);
     if (r.ok) { setMedida(""); setErro(""); } else setErro(r.erro ?? "Erro.");
   }
 

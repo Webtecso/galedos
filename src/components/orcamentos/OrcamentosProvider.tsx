@@ -1,89 +1,104 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { estadosPreExecucao, type Orcamento } from "@/lib/orcamentos";
-import { useServicos, type Resultado } from "@/components/servicos/ServicosProvider";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { EstadoOrcamento, Orcamento } from "@/lib/orcamentos";
+import type { Resultado } from "@/components/servicos/ServicosProvider";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { useDocumentos } from "@/components/documentos/DocumentosProvider";
-import { UTILIZADOR_ACTUAL } from "@/lib/servicos";
-import { hojeISO } from "@/lib/format";
+import { getSupabase } from "@/lib/supabase/client";
+import { traduzirErro } from "@/lib/erros";
+
+type Linha = {
+  id: string; servico_id: string; numero: string; valor: number; data_envio: string; estado: EstadoOrcamento;
+  data_resposta: string | null; motivo: string; utilizador_nome: string;
+};
+
+function deLinha(l: Linha): Orcamento {
+  return {
+    id: l.id,
+    servicoId: l.servico_id,
+    numero: l.numero,
+    valor: Number(l.valor),
+    dataEnvio: l.data_envio,
+    estado: l.estado,
+    dataResposta: l.data_resposta ?? "",
+    motivo: l.motivo,
+    utilizador: l.utilizador_nome,
+  };
+}
 
 type Ctx = {
   orcamentos: Orcamento[];
   carregado: boolean;
-  registar: (servicoId: string) => Resultado;
-  responder: (id: string, aceite: boolean, motivo?: string) => Resultado;
+  registar: (servicoId: string) => Promise<Resultado>;
+  responder: (id: string, aceite: boolean, motivo?: string) => Promise<Resultado>;
 };
 
 const OrcamentosContext = createContext<Ctx | null>(null);
-const CHAVE = "galedos.orcamentos.v1";
 
 export function OrcamentosProvider({ children }: { children: React.ReactNode }) {
-  const { servicos } = useServicos();
-  const { emitir } = useDocumentos();
+  const { userId } = useAuth();
+  const { recarregar: recarregarDocumentos } = useDocumentos();
   const [orcamentos, setOrcamentos] = useState<Orcamento[]>([]);
   const [carregado, setCarregado] = useState(false);
+  const emCurso = useRef(false);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CHAVE);
-      if (raw) setOrcamentos(JSON.parse(raw) as Orcamento[]);
-    } catch {
-      /* ignora */
-    }
-    setCarregado(true);
+  const carregar = useCallback(async () => {
+    const { data, error } = await getSupabase()
+      .from("orcamentos")
+      .select("*")
+      .order("criado_em", { ascending: false })
+      .limit(1000);
+    if (error) return;
+    setOrcamentos((data as unknown as Linha[]).map(deLinha));
   }, []);
 
   useEffect(() => {
-    if (!carregado) return;
-    try {
-      localStorage.setItem(CHAVE, JSON.stringify(orcamentos));
-    } catch {
-      /* ignora */
-    }
-  }, [orcamentos, carregado]);
+    let activo = true;
+    (async () => {
+      await carregar();
+      if (activo) setCarregado(true);
+    })();
+    return () => {
+      activo = false;
+    };
+  }, [userId, carregar]);
 
   const registar = useCallback(
-    (servicoId: string): Resultado => {
-      const s = servicos.find((x) => x.id === servicoId);
-      if (!s) return { ok: false, erro: "Seleccione o serviço." };
-      if (!(estadosPreExecucao as readonly string[]).includes(s.estadoOperacional))
-        return { ok: false, erro: "Só é possível registar orçamento antes de o serviço ser agendado." };
-      if (orcamentos.some((o) => o.servicoId === servicoId))
-        return { ok: false, erro: "Este serviço já tem um orçamento registado." };
-      if (!(s.total > 0)) return { ok: false, erro: "O serviço tem valor total zero." };
-      const doc = emitir("orcamento", servicoId);
-      const novo: Orcamento = {
-        id: "orc" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-        servicoId,
-        numero: doc.numero,
-        valor: s.total,
-        dataEnvio: hojeISO(),
-        estado: "Enviado",
-        dataResposta: "",
-        motivo: "",
-        utilizador: UTILIZADOR_ACTUAL,
-      };
-      setOrcamentos((l) => [novo, ...l]);
-      return { ok: true };
+    async (servicoId: string): Promise<Resultado> => {
+      if (!servicoId) return { ok: false, erro: "Seleccione o serviço." };
+      if (emCurso.current) return { ok: false, erro: "Operação em curso. Aguarde." };
+      emCurso.current = true;
+      try {
+        const { error } = await getSupabase().rpc("registar_orcamento", { p_servico: servicoId });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await Promise.all([carregar(), recarregarDocumentos()]);
+        return { ok: true };
+      } finally {
+        emCurso.current = false;
+      }
     },
-    [servicos, orcamentos, emitir]
+    [carregar, recarregarDocumentos]
   );
 
   const responder = useCallback(
-    (id: string, aceite: boolean, motivo?: string): Resultado => {
-      const o = orcamentos.find((x) => x.id === id);
-      if (!o) return { ok: false, erro: "Orçamento não encontrado." };
-      if (o.estado !== "Enviado") return { ok: false, erro: "Este orçamento já foi respondido." };
-      setOrcamentos((l) =>
-        l.map((x) =>
-          x.id === id
-            ? { ...x, estado: aceite ? "Aceite" : "Recusado", dataResposta: hojeISO(), motivo: (motivo ?? "").trim() }
-            : x
-        )
-      );
-      return { ok: true };
+    async (id: string, aceite: boolean, motivo?: string): Promise<Resultado> => {
+      if (emCurso.current) return { ok: false, erro: "Operação em curso. Aguarde." };
+      emCurso.current = true;
+      try {
+        const { error } = await getSupabase().rpc("responder_orcamento", {
+          p_id: id,
+          p_aceite: aceite,
+          p_motivo: (motivo ?? "").trim(),
+        });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await carregar();
+        return { ok: true };
+      } finally {
+        emCurso.current = false;
+      }
     },
-    [orcamentos]
+    [carregar]
   );
 
   const valor = useMemo(() => ({ orcamentos, carregado, registar, responder }), [orcamentos, carregado, registar, responder]);

@@ -1,9 +1,13 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Empresa } from "@/lib/operacao";
+import type { Resultado } from "@/components/servicos/ServicosProvider";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { getSupabase } from "@/lib/supabase/client";
+import { traduzirErro } from "@/lib/erros";
 
-type Ctx = { empresa: Empresa; carregado: boolean; guardar: (e: Empresa) => void };
+type Ctx = { empresa: Empresa; carregado: boolean; guardar: (e: Empresa) => Promise<Resultado> };
 
 const padrao: Empresa = {
   nome: "Grupo Galedos",
@@ -16,32 +20,49 @@ const padrao: Empresa = {
 };
 
 const EmpresaContext = createContext<Ctx | null>(null);
-const CHAVE = "galedos.empresa.v1";
 
 export function EmpresaProvider({ children }: { children: React.ReactNode }) {
+  const { userId } = useAuth();
   const [empresa, setEmpresa] = useState<Empresa>(padrao);
   const [carregado, setCarregado] = useState(false);
+  const emCurso = useRef(false);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CHAVE);
-      if (raw) setEmpresa({ ...padrao, ...(JSON.parse(raw) as Empresa) });
-    } catch {
-      /* ignora */
-    }
-    setCarregado(true);
+  const carregar = useCallback(async () => {
+    const { data } = await getSupabase()
+      .from("empresa")
+      .select("nome,nif,morada,telefone,email,rodape,condicoes")
+      .eq("id", 1)
+      .maybeSingle();
+    if (data) setEmpresa({ ...padrao, ...(data as unknown as Empresa) });
   }, []);
 
   useEffect(() => {
-    if (!carregado) return;
-    try {
-      localStorage.setItem(CHAVE, JSON.stringify(empresa));
-    } catch {
-      /* ignora */
-    }
-  }, [empresa, carregado]);
+    let activo = true;
+    (async () => {
+      await carregar();
+      if (activo) setCarregado(true);
+    })();
+    return () => {
+      activo = false;
+    };
+  }, [userId, carregar]);
 
-  const guardar = useCallback((e: Empresa) => setEmpresa(e), []);
+  const guardar = useCallback(
+    async (e: Empresa): Promise<Resultado> => {
+      if (emCurso.current) return { ok: false, erro: "Operação em curso. Aguarde." };
+      emCurso.current = true;
+      try {
+        const { error } = await getSupabase().rpc("guardar_empresa", { p: e });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await carregar();
+        return { ok: true };
+      } finally {
+        emCurso.current = false;
+      }
+    },
+    [carregar]
+  );
+
   const valor = useMemo(() => ({ empresa, carregado, guardar }), [empresa, carregado, guardar]);
   return <EmpresaContext.Provider value={valor}>{children}</EmpresaContext.Provider>;
 }

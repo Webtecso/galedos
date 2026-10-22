@@ -1,71 +1,82 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { prefixosDocumento, type DocumentoEmitido, type TipoDocumento } from "@/lib/operacao";
-import { UTILIZADOR_ACTUAL } from "@/lib/servicos";
-import { hojeISO } from "@/lib/format";
+import type { DocumentoEmitido, TipoDocumento } from "@/lib/operacao";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { getSupabase } from "@/lib/supabase/client";
+
+type Linha = {
+  id: string; tipo: TipoDocumento; ref_id: string; numero: string; data_emissao: string; utilizador_nome: string;
+};
+
+function deLinha(l: Linha): DocumentoEmitido {
+  return { id: l.id, tipo: l.tipo, refId: l.ref_id, numero: l.numero, dataEmissao: l.data_emissao, utilizador: l.utilizador_nome };
+}
 
 type Ctx = {
   documentos: DocumentoEmitido[];
   carregado: boolean;
-  emitir: (tipo: TipoDocumento, refId: string) => DocumentoEmitido;
+  emitir: (tipo: TipoDocumento, refId: string) => Promise<DocumentoEmitido | null>;
+  recarregar: () => Promise<void>;
 };
 
 const DocumentosContext = createContext<Ctx | null>(null);
-const CHAVE = "galedos.documentos.v1";
 
 export function DocumentosProvider({ children }: { children: React.ReactNode }) {
+  const { userId } = useAuth();
   const [documentos, setDocumentos] = useState<DocumentoEmitido[]>([]);
   const [carregado, setCarregado] = useState(false);
   const registo = useRef<DocumentoEmitido[]>([]);
+  const pendentes = useRef(new Map<string, Promise<DocumentoEmitido | null>>());
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CHAVE);
-      if (raw) {
-        registo.current = JSON.parse(raw) as DocumentoEmitido[];
-        setDocumentos(registo.current);
-      }
-    } catch {
-      /* ignora */
-    }
-    setCarregado(true);
+  const recarregar = useCallback(async () => {
+    const { data, error } = await getSupabase()
+      .from("documentos_emitidos")
+      .select("*")
+      .order("numero", { ascending: false })
+      .limit(1000);
+    if (error) return;
+    registo.current = (data as unknown as Linha[]).map(deLinha);
+    setDocumentos(registo.current);
   }, []);
 
   useEffect(() => {
-    if (!carregado) return;
-    try {
-      localStorage.setItem(CHAVE, JSON.stringify(documentos));
-    } catch {
-      /* ignora */
-    }
-  }, [documentos, carregado]);
+    let activo = true;
+    (async () => {
+      await recarregar();
+      if (activo) setCarregado(true);
+    })();
+    return () => {
+      activo = false;
+    };
+  }, [userId, recarregar]);
 
   // Idempotente: o mesmo documento (tipo + referência) mantém sempre o mesmo número.
-  const emitir = useCallback((tipo: TipoDocumento, refId: string): DocumentoEmitido => {
+  const emitir = useCallback((tipo: TipoDocumento, refId: string): Promise<DocumentoEmitido | null> => {
     const existente = registo.current.find((d) => d.tipo === tipo && d.refId === refId);
-    if (existente) return existente;
-    const ano = new Date().getFullYear();
-    const prefixo = `${prefixosDocumento[tipo]}-${ano}-`;
-    const maior = registo.current.reduce((max, d) => {
-      if (!d.numero.startsWith(prefixo)) return max;
-      const n = parseInt(d.numero.slice(prefixo.length), 10);
-      return Number.isNaN(n) ? max : Math.max(max, n);
-    }, 0);
-    const novo: DocumentoEmitido = {
-      id: "doc" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-      tipo,
-      refId,
-      numero: prefixo + String(maior + 1).padStart(4, "0"),
-      dataEmissao: hojeISO(),
-      utilizador: UTILIZADOR_ACTUAL,
-    };
-    registo.current = [...registo.current, novo];
-    setDocumentos(registo.current);
-    return novo;
+    if (existente) return Promise.resolve(existente);
+    const chave = tipo + ":" + refId;
+    const emCurso = pendentes.current.get(chave);
+    if (emCurso) return emCurso;
+    const p = (async (): Promise<DocumentoEmitido | null> => {
+      try {
+        const { data, error } = await getSupabase().rpc("emitir_documento", { p_tipo: tipo, p_ref: refId });
+        if (error || !data) return null;
+        const novo = deLinha(data as unknown as Linha);
+        if (!registo.current.some((d) => d.id === novo.id)) {
+          registo.current = [...registo.current, novo];
+          setDocumentos(registo.current);
+        }
+        return novo;
+      } finally {
+        pendentes.current.delete(chave);
+      }
+    })();
+    pendentes.current.set(chave, p);
+    return p;
   }, []);
 
-  const valor = useMemo(() => ({ documentos, carregado, emitir }), [documentos, carregado, emitir]);
+  const valor = useMemo(() => ({ documentos, carregado, emitir, recarregar }), [documentos, carregado, emitir, recarregar]);
   return <DocumentosContext.Provider value={valor}>{children}</DocumentosContext.Provider>;
 }
 

@@ -12,14 +12,17 @@ export default function ConfiguracoesPage() {
   const { empresa, guardar, carregado } = useEmpresa();
   const [f, setF] = useState(empresa);
   const [ok, setOk] = useState(false);
+  const [erroEmp, setErroEmp] = useState("");
 
   useEffect(() => { setF(empresa); }, [empresa]);
 
   if (!carregado) return <p className="text-sm text-slate-500">A carregar...</p>;
 
-  function submeter(e: React.FormEvent) {
+  async function submeter(e: React.FormEvent) {
     e.preventDefault();
-    guardar({ ...f, nome: f.nome.trim() || "Grupo Galedos" });
+    const r = await guardar({ ...f, nome: f.nome.trim() || "Grupo Galedos" });
+    if (!r.ok) { setErroEmp(r.erro ?? "Erro."); return; }
+    setErroEmp("");
     setOk(true);
     setTimeout(() => setOk(false), 3000);
   }
@@ -41,6 +44,7 @@ export default function ConfiguracoesPage() {
         </div>
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-slate-100 pt-5">
           {ok && <span className="text-sm text-emerald-700">Guardado.</span>}
+          {erroEmp && <span className="text-sm text-red-600">{erroEmp}</span>}
           <button type="submit" className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">Guardar</button>
         </div>
       </form>

@@ -50,9 +50,9 @@ export default function StockPage() {
   const prodSel = st.produtos.find((x) => x.id === mProd);
   const num = (v: string) => Number(v.replace(",", "."));
 
-  function guardarProduto(e: React.FormEvent) {
+  async function guardarProduto(e: React.FormEvent) {
     e.preventDefault();
-    const r = st.adicionarProduto({
+    const r = await st.adicionarProduto({
       nome: p.nome, categoria: p.categoria, unidade: p.unidade, quantidade: num(p.quantidade),
       minimo: num(p.minimo), fornecedor: p.fornecedor, custo: num(p.custo),
     });
@@ -62,23 +62,23 @@ export default function StockPage() {
     } else setMsg(r.erro ?? "Erro.");
   }
 
-  function registarMov(e: React.FormEvent) {
+  async function registarMov(e: React.FormEvent) {
     e.preventDefault();
-    const r = st.movimentar(mProd, mTipo, num(mValor), mMotivo);
+    const r = await st.movimentar(mProd, mTipo, num(mValor), mMotivo);
     if (r.ok) { setMValor(""); setMMotivo(""); setMsg(""); } else setMsg(r.erro ?? "Erro.");
   }
 
-  function guardarEquip(e: React.FormEvent) {
+  async function guardarEquip(e: React.FormEvent) {
     e.preventDefault();
-    const r = st.adicionarEquipamento(q);
+    const r = await st.adicionarEquipamento(q);
     if (r.ok) { setNovoEq(false); setMsg(""); setQ({ nome: "", categoria: categoriasEquipamento[0], dataAquisicao: "", observacoes: "" }); }
     else setMsg(r.erro ?? "Erro.");
   }
 
-  function guardarManutencao(e: React.FormEvent) {
+  async function guardarManutencao(e: React.FormEvent) {
     e.preventDefault();
     if (!eqSel) return;
-    const r = st.registarManutencao(eqSel.id, manDesc, num(manCusto));
+    const r = await st.registarManutencao(eqSel.id, manDesc, num(manCusto));
     if (r.ok) { setManDesc(""); setManCusto("0"); setMsg(""); } else setMsg(r.erro ?? "Erro.");
   }
 
@@ -191,7 +191,7 @@ export default function StockPage() {
                         <td className="whitespace-nowrap px-5 py-3">{formatKz(x.custo)}</td>
                         <td className="whitespace-nowrap px-5 py-3">{x.ultimaEntrada ? formatData(x.ultimaEntrada) : "—"}</td>
                         <td className="px-5 py-3">
-                          <button onClick={() => st.alternarProduto(x.id)} title="Alternar estado">
+                          <button onClick={async () => { const r = await st.alternarProduto(x.id); setMsg(r.ok ? "" : r.erro ?? "Erro."); }} title="Alternar estado">
                             <Etiqueta texto={x.estado} tom={x.estado === "Activo" ? "verde" : "cinza"} />
                           </button>
                         </td>
@@ -277,14 +277,14 @@ export default function StockPage() {
                         <p className="text-xs text-slate-500">{x.categoria}{x.dataAquisicao ? ` · adquirido em ${formatData(x.dataAquisicao)}` : ""}</p>
                       </td>
                       <td className="px-5 py-3">
-                        <select className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs" value={x.estado} onChange={(e) => st.alterarEstadoEquipamento(x.id, e.target.value as EstadoEquipamento)}>
+                        <select className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs" value={x.estado} onChange={async (e) => { const r = await st.alterarEstadoEquipamento(x.id, e.target.value as EstadoEquipamento); setMsg(r.ok ? "" : r.erro ?? "Erro."); }}>
                           {estadosEquipamento.map((s) => <option key={s} value={s}>{s}</option>)}
                         </select>
                         <div className="mt-1"><Etiqueta texto={x.estado} tom={tomEquip[x.estado]} /></div>
                       </td>
                       <td className="px-5 py-3">
                         <select className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs" value={x.responsavelId}
-                          onChange={(e) => st.atribuirEquipamento(x.id, e.target.value, co.obter(e.target.value)?.nome ?? "")}>
+                          onChange={async (e) => { const r = await st.atribuirEquipamento(x.id, e.target.value, co.obter(e.target.value)?.nome ?? ""); setMsg(r.ok ? "" : r.erro ?? "Erro."); }}>
                           <option value="">Na empresa</option>
                           {co.colaboradores.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
                         </select>

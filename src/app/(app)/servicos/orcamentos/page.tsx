@@ -38,23 +38,23 @@ export default function OrcamentosPage() {
   const aguardam = orc.orcamentos.filter((o) => o.estado === "Enviado").length;
   const conversao = enviados ? Math.round((aceites / enviados) * 1000) / 10 : null;
 
-  function registar(e: React.FormEvent) {
+  async function registar(e: React.FormEvent) {
     e.preventDefault();
-    const r = orc.registar(sel);
+    const r = await orc.registar(sel);
     if (r.ok) {
       setSel("");
       setMsg({ tipo: "ok", texto: "Orçamento registado como enviado." });
     } else setMsg({ tipo: "erro", texto: r.erro ?? "Erro." });
   }
 
-  function aceitar(id: string) {
-    const r = orc.responder(id, true);
+  async function aceitar(id: string) {
+    const r = await orc.responder(id, true);
     setMsg(r.ok ? { tipo: "ok", texto: "Orçamento aceite. Pode agora agendar o serviço (botão Editar na ordem de serviço)." } : { tipo: "erro", texto: r.erro ?? "Erro." });
   }
 
-  function recusar() {
+  async function recusar() {
     if (!recusando) return;
-    const r = orc.responder(recusando, false, motivo);
+    const r = await orc.responder(recusando, false, motivo);
     if (r.ok) {
       setRecusando(null);
       setMotivo("");

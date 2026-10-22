@@ -279,9 +279,15 @@ export default function VerDocumentoPage({ params }: { params: Promise<{ tipo: s
 
   useEffect(() => {
     if (!valido) return;
-    const d = doc.emitir(tipo as TipoDocumento, id);
-    setNumero(d.numero);
-    setEmitido(d.dataEmissao);
+    let activo = true;
+    doc.emitir(tipo as TipoDocumento, id).then((x) => {
+      if (activo && x) {
+        setNumero(x.numero);
+        setEmitido(x.dataEmissao);
+      }
+    });
+    // o número é definido quando a emissão termina
+    return () => { activo = false; };
   }, [valido, tipo, id, doc.emitir]);
 
   if (!pronto || !res) return <p className="text-sm text-slate-500">A carregar...</p>;

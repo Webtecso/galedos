@@ -34,9 +34,9 @@ export default function OcorrenciasPage() {
   const lista = oc.ocorrencias.filter((o) => estado === "todos" || o.estado === estado);
   const codServ = (id: string) => servicos.find((s) => s.id === id)?.codigo ?? "—";
 
-  function guardar(e: React.FormEvent) {
+  async function guardar(e: React.FormEvent) {
     e.preventDefault();
-    const r = oc.criar({ ...f, pessoas: f.pessoas.trim(), responsavel: f.responsavel.trim() });
+    const r = await oc.criar({ ...f, pessoas: f.pessoas.trim(), responsavel: f.responsavel.trim() });
     if (r.resultado.ok) {
       setAberto(false); setErro("");
       setF({ servicoId: "", data: "", tipo: "", descricao: "", pessoas: "", responsavel: "Administrador" });
