@@ -12,6 +12,7 @@ import {
 } from "@/lib/servicos";
 import type { EstadoOperacional, MeioPagamento } from "@/lib/types";
 import { formatData, formatKz } from "@/lib/format";
+import ExecucaoServico from "@/components/execucao/ExecucaoServico";
 
 const campo =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
@@ -217,6 +218,8 @@ export default function DetalheServicoPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
       </div>
+
+      <ExecucaoServico servicoId={servico.id} />
 
       <div className="mb-6 rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-semibold text-slate-900">Recebimentos</h2></div>

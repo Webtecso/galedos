@@ -25,14 +25,14 @@ export default function StatCard({
   tom?: TomCartao;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <div className="flex items-center gap-4">
         <div className={`rounded-xl p-3 ${tons[tom]}`}>
           <Icon className="h-6 w-6" />
         </div>
         <div className="min-w-0">
           <p className="text-sm font-medium text-slate-500">{label}</p>
-          <p className="truncate text-2xl font-semibold text-slate-900">{value}</p>
+          <p className="truncate text-xl font-semibold text-slate-900 sm:text-2xl">{value}</p>
         </div>
       </div>
       {hint && <p className="mt-3 text-xs text-slate-500">{hint}</p>}

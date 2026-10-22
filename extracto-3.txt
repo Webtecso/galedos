@@ -1,0 +1,1797 @@
+
+##### ESTADO #####
+Migracoes:
+  20261020000001_base.sql  (6.4 KB)
+  20261020000002_demo_clientes.sql  (1.8 KB)
+  20261020000003_colaboradores_servicos.sql  (20.9 KB)
+  20261020000004_demo_servicos.sql  (4.2 KB)
+  20261020000005_remuneracoes_despesas.sql  (28 KB)
+  20261020000006_demo_despesas.sql  (0.8 KB)
+  20261020000007_presencas_execucao.sql  (29 KB)
+  20261020000008_modulos_operacionais.sql  (33.4 KB)
+  20261020000009_demo_stock.sql  (1.6 KB)
+  20261020000010_precos_coordenadas.sql  (8.8 KB)
+  20261020000011_pedidos_colaborador.sql  (7.1 KB)
+Pagina de pedidos existe: True
+DistanciaConfig existe: True
+
+##### FICHEIRO supabase\migrations\20261020000005_remuneracoes_despesas.sql #####
+-- Galedos Gestão · Base 3: remunerações, pagamentos a colaboradores e despesas
+
+-- ===================== CATEGORIAS DE DESPESA =====================
+create table public.categorias_despesa (
+  id text primary key default gen_random_uuid()::text,
+  nome text not null unique check (length(trim(nome)) > 0),
+  criado_em timestamptz not null default now()
+);
+create unique index categorias_despesa_nome_ci on public.categorias_despesa (lower(nome));
+
+alter table public.categorias_despesa enable row level security;
+create policy categorias_ver on public.categorias_despesa for select to authenticated using (public.e_admin());
+create policy categorias_criar on public.categorias_despesa for insert to authenticated with check (public.e_admin());
+revoke all on public.categorias_despesa from anon;
+revoke update, delete, truncate on public.categorias_despesa from authenticated;
+
+create trigger categorias_auditoria after insert or update or delete on public.categorias_despesa
+  for each row execute function public.auditar();
+
+insert into public.categorias_despesa (nome) values
+  ('Produtos de limpeza'), ('Transporte'), ('Combustível'), ('Manutenção'), ('Equipamentos'),
+  ('Publicidade'), ('Comunicações'), ('Serviços administrativos'), ('Outras despesas');
+
+-- ===================== DESPESAS =====================
+create sequence public.despesas_seq;
+
+create table public.despesas (
+  id text primary key default gen_random_uuid()::text,
+  codigo text not null unique default ('DSP-' || lpad(nextval('public.despesas_seq')::text, 4, '0')),
+  data date not null,
+  categoria text not null references public.categorias_despesa (nome),
+  descricao text not null check (length(trim(descricao)) > 0),
+  valor numeric(14,2) not null check (valor > 0),
+  fornecedor text not null default '',
+  meio text not null check (meio in ('Dinheiro', 'Transferência bancária', 'Multicaixa Express', 'Outro')),
+  referencia text not null default '',
+  estado text not null check (estado in ('Pago', 'Por pagar', 'Anulada')),
+  observacoes text not null default '',
+  motivo_anulacao text not null default '',
+  criado_em timestamptz not null default now(),
+  actualizado_em timestamptz not null default now(),
+  constraint motivo_anulacao_obrigatorio check (estado <> 'Anulada' or length(trim(motivo_anulacao)) > 0)
+);
+create index despesas_data_idx on public.despesas (data);
+
+create or replace function public.despesas_regras()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.estado not in ('Pago', 'Por pagar') then
+      raise exception 'Uma despesa nova só pode ser registada como "Pago" ou "Por pagar".';
+    end if;
+    new.motivo_anulacao := '';
+    return new;
+  end if;
+
+  if old.estado = 'Anulada' then
+    raise exception 'A despesa está anulada e já não pode ser alterada.';
+  end if;
+  if (to_jsonb(new) - 'estado' - 'motivo_anulacao' - 'actualizado_em')
+     is distinct from (to_jsonb(old) - 'estado' - 'motivo_anulacao' - 'actualizado_em') then
+    raise exception 'Os dados de uma despesa registada não podem ser editados. Anule-a com motivo e registe uma nova.';
+  end if;
+
+  if new.estado <> old.estado then
+    if new.estado = 'Pago' and old.estado = 'Por pagar' then
+      null;
+    elsif new.estado = 'Anulada' then
+      if length(trim(new.motivo_anulacao)) = 0 then
+        raise exception 'O motivo da anulação é obrigatório.';
+      end if;
+    else
+      raise exception 'Não é possível passar de "%" para "%".', old.estado, new.estado;
+    end if;
+  elsif new.motivo_anulacao is distinct from old.motivo_anulacao then
+    raise exception 'O motivo só pode ser indicado ao anular a despesa.';
+  end if;
+  return new;
+end;
+$$;
+revoke execute on function public.despesas_regras() from public, anon, authenticated;
+
+alter table public.despesas enable row level security;
+create policy despesas_ver on public.despesas for select to authenticated using (public.e_admin());
+create policy despesas_criar on public.despesas for insert to authenticated with check (public.e_admin());
+create policy despesas_actualizar on public.despesas for update to authenticated
+  using (public.e_admin()) with check (public.e_admin());
+revoke all on public.despesas from anon;
+revoke delete, truncate on public.despesas from authenticated;
+grant usage, select on sequence public.despesas_seq to authenticated;
+
+create trigger despesas_a_regras before insert or update on public.despesas
+  for each row execute function public.despesas_regras();
+create trigger despesas_b_actualizado before update on public.despesas
+  for each row execute function public.definir_actualizado_em();
+create trigger despesas_c_auditoria after insert or update or delete on public.despesas
+  for each row execute function public.auditar();
+
+-- ===================== CONFIGURAÇÃO DAS REMUNERAÇÕES (versionada) =====================
+create table public.config_remuneracao (
+  id bigint generated always as identity primary key,
+  percentagem_equipa numeric(5,2) not null check (percentagem_equipa >= 0 and percentagem_equipa <= 100),
+  modalidade text not null check (modalidade in ('Divisão igual', 'Percentagens individuais', 'Quotas por serviço')),
+  entrada_em_vigor date not null,
+  accao text not null,
+  utilizador_nome text not null default 'Sistema',
+  criado_em timestamptz not null default now()
+);
+
+alter table public.config_remuneracao enable row level security;
+create policy config_ver on public.config_remuneracao for select to authenticated using (public.e_admin());
+revoke all on public.config_remuneracao from anon, authenticated;
+grant select on public.config_remuneracao to authenticated;
+
+create trigger config_auditoria after insert or update or delete on public.config_remuneracao
+  for each row execute function public.auditar();
+
+insert into public.config_remuneracao (percentagem_equipa, modalidade, entrada_em_vigor, accao)
+values (40, 'Divisão igual', '2026-01-01', 'Configuração inicial: equipa 40% (Divisão igual).');
+
+-- ===================== PERÍODOS FECHADOS =====================
+create table public.periodos_remuneracao (
+  id text primary key default gen_random_uuid()::text,
+  periodo text not null unique check (periodo ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  fechado_em timestamptz not null default now(),
+  fechado_por text not null default 'Sistema'
+);
+
+alter table public.periodos_remuneracao enable row level security;
+create policy periodos_ver on public.periodos_remuneracao for select to authenticated using (public.e_admin());
+revoke all on public.periodos_remuneracao from anon, authenticated;
+grant select on public.periodos_remuneracao to authenticated;
+
+create trigger periodos_auditoria after insert or update or delete on public.periodos_remuneracao
+  for each row execute function public.auditar();
+
+-- ===================== QUOTAS POR SERVIÇO =====================
+create table public.quotas_servico (
+  id text primary key default gen_random_uuid()::text,
+  servico_id text not null references public.servicos (id),
+  colaborador_id text not null references public.colaboradores (id),
+  quota numeric(6,2) not null check (quota >= 0 and quota <= 100),
+  definido_em timestamptz not null default now(),
+  definido_por text not null default 'Sistema',
+  unique (servico_id, colaborador_id)
+);
+
+alter table public.quotas_servico enable row level security;
+create policy quotas_ver on public.quotas_servico for select to authenticated using (public.e_admin());
+revoke all on public.quotas_servico from anon, authenticated;
+grant select on public.quotas_servico to authenticated;
+
+create trigger quotas_auditoria after insert or update or delete on public.quotas_servico
+  for each row execute function public.auditar();
+
+-- ===================== REMUNERAÇÕES =====================
+create table public.remuneracoes (
+  id text primary key default gen_random_uuid()::text,
+  tipo text not null check (tipo in ('Serviço', 'Ajuste')),
+  servico_id text references public.servicos (id),
+  servico_codigo text not null default '—',
+  recebimento_id text references public.recebimentos (id),
+  colaborador_id text not null references public.colaboradores (id),
+  valor_elegivel numeric(14,2) not null default 0,
+  percentagem numeric(10,6) not null default 0,
+  regra text not null default '',
+  valor numeric(14,2) not null,
+  data date not null default ((now() at time zone 'Africa/Luanda')::date),
+  periodo text not null check (periodo ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  aprovada boolean not null default false,
+  motivo text not null default '',
+  criado_em timestamptz not null default now(),
+  constraint remuneracao_coerente check (
+    (tipo = 'Serviço' and servico_id is not null and recebimento_id is not null and valor >= 0)
+    or (tipo = 'Ajuste' and valor <> 0 and length(trim(motivo)) > 0))
+);
+create unique index remuneracoes_sem_duplicados on public.remuneracoes (recebimento_id, colaborador_id)
+  where recebimento_id is not null;
+create index remuneracoes_colaborador_idx on public.remuneracoes (colaborador_id);
+create index remuneracoes_periodo_idx on public.remuneracoes (periodo);
+
+create or replace function public.remuneracoes_regras()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' then
+    if exists (select 1 from public.periodos_remuneracao where periodo = new.periodo) then
+      raise exception 'O período % está fechado.', new.periodo;
+    end if;
+    if new.tipo = 'Serviço' and new.aprovada then
+      raise exception 'Uma remuneração de serviço só pode ser aprovada depois de apurada.';
+    end if;
+    return new;
+  end if;
+
+  if (to_jsonb(new) - 'aprovada') is distinct from (to_jsonb(old) - 'aprovada') then
+    raise exception 'Uma remuneração apurada não pode ser alterada. Use um ajuste autorizado.';
+  end if;
+  if old.aprovada and not new.aprovada then
+    raise exception 'Uma remuneração aprovada não pode voltar atrás. Use um ajuste autorizado.';
+  end if;
+  return new;
+end;
+$$;
+revoke execute on function public.remuneracoes_regras() from public, anon, authenticated;
+
+alter table public.remuneracoes enable row level security;
+create policy remuneracoes_ver on public.remuneracoes for select to authenticated
+  using (public.e_admin() or colaborador_id = public.colaborador_actual());
+revoke all on public.remuneracoes from anon, authenticated;
+grant select on public.remuneracoes to authenticated;
+
+create trigger remuneracoes_a_regras before insert or update on public.remuneracoes
+  for each row execute function public.remuneracoes_regras();
+create trigger remuneracoes_c_auditoria after insert or update or delete on public.remuneracoes
+  for each row execute function public.auditar();
+
+-- ===================== PAGAMENTOS A COLABORADORES =====================
+create table public.pagamentos_colaboradores (
+  id text primary key default gen_random_uuid()::text,
+  colaborador_id text not null references public.colaboradores (id),
+  tipo text not null check (tipo in ('Pagamento', 'Adiantamento')),
+  data date not null default ((now() at time zone 'Africa/Luanda')::date),
+  valor numeric(14,2) not null check (valor > 0),
+  meio text not null check (meio in ('Dinheiro', 'Transferência bancária', 'Multicaixa Express', 'Outro')),
+  referencia text not null default '',
+  utilizador_id uuid default auth.uid(),
+  utilizador_nome text not null default 'Sistema',
+  criado_em timestamptz not null default now()
+);
+create index pagamentos_colab_idx on public.pagamentos_colaboradores (colaborador_id);
+create unique index pagamentos_colab_sem_duplicados
+  on public.pagamentos_colaboradores (colaborador_id, valor, meio, referencia) where referencia <> '';
+
+alter table public.pagamentos_colaboradores enable row level security;
+create policy pagamentos_colab_ver on public.pagamentos_colaboradores for select to authenticated
+  using (public.e_admin() or colaborador_id = public.colaborador_actual());
+revoke all on public.pagamentos_colaboradores from anon, authenticated;
+grant select on public.pagamentos_colaboradores to authenticated;
+
+create trigger pagamentos_colab_auditoria after insert or update or delete on public.pagamentos_colaboradores
+  for each row execute function public.auditar();
+
+-- ===================== DISTRIBUIÇÃO (função interna) =====================
+create or replace function public.distribuir_remuneracao(
+  p_valor numeric, p_equipa text[], p_modalidade text, p_pct numeric, p_servico text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  n integer := coalesce(cardinality(p_equipa), 0);
+  v_total numeric;
+  v_base numeric[] := array[]::numeric[];
+  v_pcts numeric[] := array[]::numeric[];
+  v_resto numeric;
+  v_soma numeric;
+  v_quota numeric;
+  v_nomes text;
+  v_count integer;
+  i integer;
+begin
+  if n = 0 then
+    return jsonb_build_object('aviso', 'sem equipa atribuída');
+  end if;
+
+  if p_modalidade = 'Divisão igual' then
+    v_total := round(p_valor * p_pct / 100);
+    v_resto := v_total - floor(v_total / n) * n;
+    for i in 1..n loop
+      v_base := array_append(v_base, floor(v_total / n) + case when i <= v_resto then 1 else 0 end);
+      v_pcts := array_append(v_pcts, p_pct / n);
+    end loop;
+    return jsonb_build_object(
+      'regra', 'Divisão igual · equipa ' || trim_scale(p_pct)::text || '%',
+      'valores', to_jsonb(v_base), 'percentagens', to_jsonb(v_pcts));
+  end if;
+
+  if p_modalidade = 'Quotas por serviço' then
+    select count(*), coalesce(sum(quota), 0) into v_count, v_soma
+    from public.quotas_servico where servico_id = p_servico;
+    if v_count = 0 then
+      return jsonb_build_object('aviso', 'modalidade Quotas por serviço sem quotas definidas (Remunerações > Quotas por serviço)');
+    end if;
+    if v_count <> n or exists (
+      select 1 from unnest(p_equipa) e
+      where not exists (select 1 from public.quotas_servico q where q.servico_id = p_servico and q.colaborador_id = e)) then
+      return jsonb_build_object('aviso', 'as quotas definidas já não correspondem à equipa actual');
+    end if;
+    if abs(v_soma - 100) > 0.01 then
+      return jsonb_build_object('aviso', 'as quotas somam ' || trim_scale(v_soma)::text || '% (devem somar 100%)');
+    end if;
+    v_total := round(p_valor * p_pct / 100);
+    for i in 1..n loop
+      select quota into v_quota from public.quotas_servico
+      where servico_id = p_servico and colaborador_id = p_equipa[i];
+      v_base := array_append(v_base, floor(v_total * v_quota / v_soma));
+      v_pcts := array_append(v_pcts, p_pct * v_quota / v_soma);
+    end loop;
+    select v_total - sum(x) into v_resto from unnest(v_base) x;
+    i := 1;
+    while v_resto > 0 loop
+      v_base[i] := v_base[i] + 1;
+      v_resto := v_resto - 1;
+      i := (i % n) + 1;
+    end loop;
+    return jsonb_build_object(
+      'regra', 'Quotas por serviço · equipa ' || trim_scale(p_pct)::text || '%',
+      'valores', to_jsonb(v_base), 'percentagens', to_jsonb(v_pcts));
+  end if;
+
+  -- Percentagens individuais
+  select string_agg(c.nome, ', ' order by c.nome) into v_nomes
+  from public.colaboradores c where c.id = any (p_equipa) and not (c.percentagem > 0);
+  if v_nomes is not null then
+    return jsonb_build_object('aviso', 'sem percentagem individual: ' || v_nomes);
+  end if;
+  select coalesce(sum(c.percentagem), 0) into v_soma from public.colaboradores c where c.id = any (p_equipa);
+  if v_soma > 100 then
+    return jsonb_build_object('aviso', 'a soma das percentagens da equipa (' || trim_scale(v_soma)::text || '%) excede 100%');
+  end if;
+  for i in 1..n loop
+    select percentagem into v_quota from public.colaboradores where id = p_equipa[i];
+    v_base := array_append(v_base, round(p_valor * v_quota / 100));
+    v_pcts := array_append(v_pcts, v_quota);
+  end loop;
+  return jsonb_build_object('regra', 'Percentagens individuais', 'valores', to_jsonb(v_base), 'percentagens', to_jsonb(v_pcts));
+end;
+$$;
+revoke execute on function public.distribuir_remuneracao(numeric, text[], text, numeric, text) from public, anon, authenticated;
+
+-- ===================== APURAMENTO =====================
+create or replace function public.apurar_remuneracoes()
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  v_cfg record;
+  v_hoje date := (now() at time zone 'Africa/Luanda')::date;
+  v_periodo text := to_char((now() at time zone 'Africa/Luanda')::date, 'YYYY-MM');
+  v_meses text[] := array['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  rec record;
+  v_equipa text[];
+  v_d jsonb;
+  v_n integer;
+  i integer;
+  v_criadas integer := 0;
+  v_aguardam integer := 0;
+  v_avisos text[] := array[]::text[];
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('apurar_remuneracoes'));
+
+  if exists (select 1 from public.periodos_remuneracao where periodo = v_periodo) then
+    raise exception 'O período % % está fechado. Use um ajuste para correcções.',
+      v_meses[extract(month from v_hoje)::integer], extract(year from v_hoje)::integer;
+  end if;
+
+  select * into v_cfg from public.config_remuneracao order by id desc limit 1;
+  if not found then
+    raise exception 'Configuração de remuneração em falta.';
+  end if;
+
+  for rec in
+    select r.id as rec_id, r.valor, s.id as servico_id, s.codigo, s.estado_operacional
+    from public.recebimentos r
+    join public.servicos s on s.id = r.servico_id
+    where not exists (select 1 from public.remuneracoes m where m.recebimento_id = r.id)
+    order by r.criado_em, r.id
+  loop
+    if rec.estado_operacional <> 'Concluído' then
+      if rec.estado_operacional <> 'Cancelado' then
+        v_aguardam := v_aguardam + 1;
+      end if;
+      continue;
+    end if;
+
+    select coalesce(array_agg(sc.colaborador_id order by sc.colaborador_id), array[]::text[]) into v_equipa
+    from public.servico_colaboradores sc where sc.servico_id = rec.servico_id;
+    v_n := cardinality(v_equipa);
+
+    v_d := public.distribuir_remuneracao(rec.valor, v_equipa, v_cfg.modalidade, v_cfg.percentagem_equipa, rec.servico_id);
+    if (v_d ->> 'aviso') is not null then
+      v_avisos := array_append(v_avisos, rec.codigo || ': ' || (v_d ->> 'aviso'));
+      continue;
+    end if;
+
+    for i in 1..v_n loop
+      insert into public.remuneracoes (
+        tipo, servico_id, servico_codigo, recebimento_id, colaborador_id,
+        valor_elegivel, percentagem, regra, valor, data, periodo)
+      values (
+        'Serviço', rec.servico_id, rec.codigo, rec.rec_id, v_equipa[i],
+        rec.valor, (v_d -> 'percentagens' ->> (i - 1))::numeric, v_d ->> 'regra',
+        (v_d -> 'valores' ->> (i - 1))::numeric, v_hoje, v_periodo);
+      v_criadas := v_criadas + 1;
+    end loop;
+  end loop;
+
+  if v_aguardam > 0 then
+    v_avisos := array_append(v_avisos, v_aguardam::text || ' recebimento(s) aguardam a conclusão do respectivo serviço.');
+  end if;
+  return jsonb_build_object('criadas', v_criadas, 'avisos', to_jsonb(v_avisos));
+end;
+$$;
+revoke execute on function public.apurar_remuneracoes() from public, anon;
+grant execute on function public.apurar_remuneracoes() to authenticated;
+
+-- ===================== APROVAR / FECHAR =====================
+create or replace function public.aprovar_periodo(p_periodo text)
+returns integer language plpgsql security definer set search_path = '' as $$
+declare
+  v_n integer;
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  update public.remuneracoes set aprovada = true where periodo = p_periodo and not aprovada;
+  get diagnostics v_n = row_count;
+  if v_n = 0 then
+    raise exception 'Não há remunerações por aprovar neste período.';
+  end if;
+  return v_n;
+end;
+$$;
+revoke execute on function public.aprovar_periodo(text) from public, anon;
+grant execute on function public.aprovar_periodo(text) to authenticated;
+
+create or replace function public.fechar_periodo(p_periodo text)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  if p_periodo is null or p_periodo !~ '^\d{4}-(0[1-9]|1[0-2])$' then
+    raise exception 'Período inválido.';
+  end if;
+  if exists (select 1 from public.periodos_remuneracao where periodo = p_periodo) then
+    raise exception 'Este período já está fechado.';
+  end if;
+  if exists (select 1 from public.remuneracoes where periodo = p_periodo and not aprovada) then
+    raise exception 'Aprove todas as remunerações do período antes de o fechar.';
+  end if;
+  insert into public.periodos_remuneracao (periodo, fechado_por)
+  values (p_periodo, public.nome_utilizador_actual());
+end;
+$$;
+revoke execute on function public.fechar_periodo(text) from public, anon;
+grant execute on function public.fechar_periodo(text) to authenticated;
+
+-- ===================== AJUSTES =====================
+create or replace function public.registar_ajuste(p_colaborador text, p_valor numeric, p_motivo text)
+returns text language plpgsql security definer set search_path = '' as $$
+declare
+  v_hoje date := (now() at time zone 'Africa/Luanda')::date;
+  v_p date := date_trunc('month', (now() at time zone 'Africa/Luanda'))::date;
+  v_valor numeric;
+  v_id text;
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  if not exists (select 1 from public.colaboradores where id = p_colaborador) then
+    raise exception 'Seleccione o colaborador.';
+  end if;
+  v_valor := round(coalesce(p_valor, 0));
+  if v_valor = 0 then
+    raise exception 'Indique um valor diferente de zero (negativo para deduzir).';
+  end if;
+  if p_motivo is null or length(trim(p_motivo)) = 0 then
+    raise exception 'O motivo do ajuste é obrigatório.';
+  end if;
+  loop
+    exit when not exists (select 1 from public.periodos_remuneracao where periodo = to_char(v_p, 'YYYY-MM'));
+    v_p := (v_p + interval '1 month')::date;
+  end loop;
+  insert into public.remuneracoes (tipo, servico_codigo, colaborador_id, regra, valor, data, periodo, aprovada, motivo)
+  values ('Ajuste', '—', p_colaborador, 'Ajuste autorizado', v_valor, v_hoje, to_char(v_p, 'YYYY-MM'), true, trim(p_motivo))
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+revoke execute on function public.registar_ajuste(text, numeric, text) from public, anon;
+grant execute on function public.registar_ajuste(text, numeric, text) to authenticated;
+
+-- ===================== PAGAMENTOS =====================
+create or replace function public.registar_pagamento_colaborador(
+  p_colaborador text, p_tipo text, p_valor numeric, p_meio text, p_referencia text)
+returns text language plpgsql security definer set search_path = '' as $$
+declare
+  v_aprovado numeric;
+  v_pago numeric;
+  v_saldo numeric;
+  v_valor numeric;
+  v_ref text := trim(coalesce(p_referencia, ''));
+  v_id text;
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  perform 1 from public.colaboradores where id = p_colaborador for update;
+  if not found then
+    raise exception 'Seleccione o colaborador.';
+  end if;
+  if p_tipo not in ('Pagamento', 'Adiantamento') then
+    raise exception 'Tipo de pagamento inválido.';
+  end if;
+  v_valor := round(coalesce(p_valor, 0), 2);
+  if v_valor <= 0 then
+    raise exception 'Indique um valor superior a zero.';
+  end if;
+
+  select coalesce(sum(valor), 0) into v_aprovado
+  from public.remuneracoes where colaborador_id = p_colaborador and aprovada;
+  select coalesce(sum(valor), 0) into v_pago
+  from public.pagamentos_colaboradores where colaborador_id = p_colaborador;
+  v_saldo := v_aprovado - v_pago;
+
+  if p_tipo = 'Pagamento' and v_valor > greatest(0, v_saldo) then
+    raise exception 'O valor excede o saldo aprovado por pagar (% Kz). Para valores antes da aprovação, use "Adiantamento".',
+      trim_scale(greatest(0, v_saldo))::text;
+  end if;
+  if v_ref <> '' and exists (
+    select 1 from public.pagamentos_colaboradores
+    where colaborador_id = p_colaborador and valor = v_valor and meio = p_meio and referencia = v_ref) then
+    raise exception 'Já existe um pagamento com o mesmo valor, meio e referência.';
+  end if;
+
+  insert into public.pagamentos_colaboradores (colaborador_id, tipo, valor, meio, referencia, utilizador_nome)
+  values (p_colaborador, p_tipo, v_valor, p_meio, v_ref, public.nome_utilizador_actual())
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+revoke execute on function public.registar_pagamento_colaborador(text, text, numeric, text, text) from public, anon;
+grant execute on function public.registar_pagamento_colaborador(text, text, numeric, text, text) to authenticated;
+
+-- ===================== CONFIGURAÇÃO =====================
+create or replace function public.alterar_config_remuneracao(p_percentagem numeric, p_modalidade text)
+returns void language plpgsql security definer set search_path = '' as $$
+declare
+  v_actual record;
+  v_pct numeric;
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  if p_percentagem is null or p_percentagem < 0 or p_percentagem > 100 then
+    raise exception 'A percentagem da equipa deve estar entre 0 e 100.';
+  end if;
+  if p_modalidade not in ('Divisão igual', 'Percentagens individuais', 'Quotas por serviço') then
+    raise exception 'Modalidade inválida.';
+  end if;
+  v_pct := round(p_percentagem, 2);
+  select * into v_actual from public.config_remuneracao order by id desc limit 1;
+  if v_actual.percentagem_equipa = v_pct and v_actual.modalidade = p_modalidade then
+    raise exception 'Não há alterações a guardar.';
+  end if;
+  insert into public.config_remuneracao (percentagem_equipa, modalidade, entrada_em_vigor, accao, utilizador_nome)
+  values (
+    v_pct, p_modalidade, (now() at time zone 'Africa/Luanda')::date,
+    'Configuração alterada: equipa ' || trim_scale(v_actual.percentagem_equipa)::text || '% (' || v_actual.modalidade
+      || ') para ' || trim_scale(v_pct)::text || '% (' || p_modalidade || '). Aplica-se apenas a apuramentos futuros.',
+    public.nome_utilizador_actual());
+end;
+$$;
+revoke execute on function public.alterar_config_remuneracao(numeric, text) from public, anon;
+grant execute on function public.alterar_config_remuneracao(numeric, text) to authenticated;
+
+-- ===================== QUOTAS =====================
+create or replace function public.definir_quotas(p_servico text, p_quotas jsonb)
+returns void language plpgsql security definer set search_path = '' as $$
+declare
+  v_estado text;
+  v_equipa text[];
+  v_id text;
+  v_q numeric;
+  v_soma numeric := 0;
+begin
+  if not public.e_admin() then
+    raise exception 'Sem permissão para esta operação.';
+  end if;
+  select estado_operacional into v_estado from public.servicos where id = p_servico for update;
+  if not found then
+    raise exception 'Seleccione o serviço.';
+  end if;
+  if v_estado = 'Cancelado' then
+    raise exception 'O serviço está cancelado.';
+  end if;
+  select array_agg(colaborador_id order by colaborador_id) into v_equipa
+  from public.servico_colaboradores where servico_id = p_servico;
+  if v_equipa is null then
+    raise exception 'O serviço não tem equipa atribuída.';
+  end if;
+  if exists (select 1 from public.remuneracoes where servico_id = p_servico and tipo = 'Serviço') then
+    raise exception 'Este serviço já tem remunerações apuradas; as quotas não podem ser alteradas. Use um ajuste.';
+  end if;
+
+  foreach v_id in array v_equipa loop
+    if jsonb_typeof(p_quotas -> v_id) is distinct from 'number' then
+      raise exception 'Indique uma quota válida (0 ou mais) para cada colaborador.';
+    end if;
+    v_q := round((p_quotas ->> v_id)::numeric, 2);
+    if v_q < 0 or v_q > 100 then
+      raise exception 'Indique uma quota válida (0 ou mais) para cada colaborador.';
+    end if;
+    v_soma := v_soma + v_q;
+  end loop;
+  if abs(v_soma - 100) > 0.01 then
+    raise exception '%', 'As quotas somam ' || trim_scale(v_soma)::text || '%; devem somar exactamente 100%.';
+  end if;
+
+  delete from public.quotas_servico where servico_id = p_servico;
+  insert into public.quotas_servico (servico_id, colaborador_id, quota, definido_por)
+  select p_servico, x, round((p_quotas ->> x)::numeric, 2), public.nome_utilizador_actual()
+  from unnest(v_equipa) as x;
+end;
+$$;
+revoke execute on function public.definir_quotas(text, jsonb) from public, anon;
+grant execute on function public.definir_quotas(text, jsonb) to authenticated;
+
+##### FICHEIRO supabase\migrations\20261020000006_demo_despesas.sql #####
+insert into public.despesas (id, codigo, data, categoria, descricao, valor, fornecedor, meio, referencia, estado) values
+('d1', 'DSP-0001', '2026-10-02', 'Produtos de limpeza', 'Detergente para estofados (20 L)', 28000, 'Casa da Química', 'Dinheiro', '', 'Pago'),
+('d2', 'DSP-0002', '2026-10-05', 'Combustível', 'Combustível da carrinha', 15000, '', 'Dinheiro', '', 'Pago'),
+('d3', 'DSP-0003', '2026-10-09', 'Transporte', 'Táxi para entrega de equipamento', 4500, '', 'Dinheiro', '', 'Pago'),
+('d4', 'DSP-0004', '2026-10-14', 'Manutenção', 'Reparação da máquina de extracção', 22000, 'Oficina Técnica Luanda', 'Dinheiro', '', 'Por pagar'),
+('d5', 'DSP-0005', '2026-09-18', 'Comunicações', 'Saldo de dados móveis', 6000, '', 'Dinheiro', '', 'Pago');
+select setval('public.despesas_seq', 5);
+
+##### CREATE TABLE catalogo_servicos #####
+create table public.catalogo_servicos (
+  id text primary key default gen_random_uuid()::text,
+  codigo text not null unique default ('SRV-' || lpad(nextval('public.catalogo_seq')::text, 3, '0')),
+  nome text not null check (length(trim(nome)) > 0),
+  descricao text not null default '',
+  unidade text not null default 'unidade',
+  preco numeric(14,2) not null check (preco >= 0),
+  duracao_min integer not null check (duracao_min > 0),
+  activo boolean not null default true,
+  criado_em timestamptz not null default now(),
+  actualizado_em timestamptz not null default now()
+);
+
+##### STORAGE NAS MIGRACOES #####
+
+##### USO DE STORAGE NO CODIGO #####
+[src\lib\csv.ts:13] const url = URL.createObjectURL(blob);
+
+##### FICHEIRO package.json #####
+{
+  "name": "galedos-gestao",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.118.0",
+    "lucide-react": "^1.59.0",
+    "next": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.2",
+    "supabase": "^2.121.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+
+
+##### FICHEIRO src\lib\supabase\client.ts #####
+import { createBrowserClient } from "@supabase/ssr";
+
+let cliente: ReturnType<typeof createBrowserClient> | null = null;
+
+export function getSupabase() {
+  if (!cliente) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const chave = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !chave) {
+      throw new Error("Falta configurar o Supabase (.env.local). Reinicie o servidor com npm run dev.");
+    }
+    cliente = createBrowserClient(url, chave);
+  }
+  return cliente;
+}
+
+##### FICHEIRO src\lib\remuneracoes.ts #####
+import type {
+  ColaboradorCompleto, ConfigRemuneracao, EstadoRemuneracao, PagamentoColaborador, Remuneracao,
+} from "./types";
+
+export const modalidadesDistribuicao = ["Divisão igual", "Percentagens individuais", "Quotas por serviço"] as const;
+
+export type LinhaDistribuicao = { colaboradorId: string; percentagem: number; valor: number };
+export type ResultadoDistribuicao = { linhas: LinhaDistribuicao[]; regra: string; aviso?: string };
+
+export function distribuir(
+  valorElegivel: number,
+  equipa: ColaboradorCompleto[],
+  config: ConfigRemuneracao,
+  quotas?: Record<string, number>
+): ResultadoDistribuicao {
+  if (equipa.length === 0) return { linhas: [], regra: "", aviso: "sem equipa atribuída" };
+
+  if (config.modalidade === "Divisão igual") {
+    const total = Math.round((valorElegivel * config.percentagemEquipa) / 100);
+    const base = Math.floor(total / equipa.length);
+    let resto = total - base * equipa.length;
+    const linhas = equipa.map((c) => {
+      const extra = resto > 0 ? 1 : 0;
+      if (resto > 0) resto--;
+      return {
+        colaboradorId: c.id,
+        percentagem: config.percentagemEquipa / equipa.length,
+        valor: base + extra,
+      };
+    });
+    return { linhas, regra: `Divisão igual · equipa ${config.percentagemEquipa}%` };
+  }
+
+  if (config.modalidade === "Quotas por serviço") {
+    if (!quotas)
+      return { linhas: [], regra: "", aviso: "modalidade Quotas por serviço sem quotas definidas (Remunerações > Quotas por serviço)" };
+    const ids = equipa.map((c) => c.id);
+    const chaves = Object.keys(quotas);
+    if (ids.length !== chaves.length || !ids.every((id) => id in quotas))
+      return { linhas: [], regra: "", aviso: "as quotas definidas já não correspondem à equipa actual" };
+    const soma = ids.reduce((t, id) => t + quotas[id], 0);
+    if (Math.abs(soma - 100) > 0.01)
+      return { linhas: [], regra: "", aviso: `as quotas somam ${Math.round(soma * 100) / 100}% (devem somar 100%)` };
+
+    const total = Math.round((valorElegivel * config.percentagemEquipa) / 100);
+    const base = ids.map((id) => Math.floor((total * quotas[id]) / soma));
+    let resto = total - base.reduce((a, b) => a + b, 0);
+    for (let i = 0; resto > 0; i = (i + 1) % base.length) {
+      base[i] += 1;
+      resto -= 1;
+    }
+    const linhas = equipa.map((c, i) => ({
+      colaboradorId: c.id,
+      percentagem: (config.percentagemEquipa * quotas[c.id]) / soma,
+      valor: base[i],
+    }));
+    return { linhas, regra: `Quotas por serviço · equipa ${config.percentagemEquipa}%` };
+  }
+
+  const semPct = equipa.filter((c) => !(c.percentagem > 0));
+  if (semPct.length > 0)
+    return { linhas: [], regra: "", aviso: `sem percentagem individual: ${semPct.map((c) => c.nome).join(", ")}` };
+  const soma = equipa.reduce((t, c) => t + c.percentagem, 0);
+  if (soma > 100) return { linhas: [], regra: "", aviso: `a soma das percentagens da equipa (${soma}%) excede 100%` };
+  const linhas = equipa.map((c) => ({
+    colaboradorId: c.id,
+    percentagem: c.percentagem,
+    valor: Math.round((valorElegivel * c.percentagem) / 100),
+  }));
+  return { linhas, regra: "Percentagens individuais" };
+}
+
+export type Saldo = { apurado: number; aprovado: number; pago: number; saldo: number };
+
+export function saldoColaborador(
+  colaboradorId: string,
+  remuneracoes: Remuneracao[],
+  pagamentos: PagamentoColaborador[]
+): Saldo {
+  const minhas = remuneracoes.filter((r) => r.colaboradorId === colaboradorId);
+  const apurado = minhas.reduce((t, r) => t + r.valor, 0);
+  const aprovado = minhas.filter((r) => r.aprovada).reduce((t, r) => t + r.valor, 0);
+  const pago = pagamentos.filter((p) => p.colaboradorId === colaboradorId).reduce((t, p) => t + p.valor, 0);
+  return { apurado, aprovado, pago, saldo: aprovado - pago };
+}
+
+export function estadosRemuneracao(
+  remuneracoes: Remuneracao[],
+  pagamentos: PagamentoColaborador[]
+): Record<string, EstadoRemuneracao> {
+  const out: Record<string, EstadoRemuneracao> = {};
+  const ids = Array.from(new Set(remuneracoes.map((r) => r.colaboradorId)));
+  for (const cid of ids) {
+    let pool = pagamentos.filter((p) => p.colaboradorId === cid).reduce((t, p) => t + p.valor, 0);
+    const lista = remuneracoes
+      .filter((r) => r.colaboradorId === cid)
+      .sort((a, b) => (a.data + a.id).localeCompare(b.data + b.id));
+    for (const r of lista) {
+      if (!r.aprovada) {
+        out[r.id] = "Apurada";
+      } else if (r.valor <= 0) {
+        out[r.id] = "Aprovada";
+      } else {
+        const tomar = Math.min(pool, r.valor);
+        pool -= tomar;
+        out[r.id] = tomar >= r.valor ? "Paga" : tomar > 0 ? "Parcialmente paga" : "Aprovada";
+      }
+    }
+  }
+  return out;
+}
+
+##### FICHEIRO src\components\remuneracoes\RemuneracoesProvider.tsx #####
+"use client";
+
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  ConfigRemuneracao, MeioPagamento, ModalidadeDistribuicao, PagamentoColaborador, Remuneracao,
+} from "@/lib/types";
+import type { Resultado } from "@/components/servicos/ServicosProvider";
+import { getSupabase } from "@/lib/supabase/client";
+import { buscarTudo } from "@/lib/supabase/buscar";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { traduzirErro } from "@/lib/erros";
+
+export type QuotaServico = { quotas: Record<string, number>; data: string; utilizador: string };
+export type ResultadoApuramento = { criadas: number; avisos: string[]; erro?: string };
+export type PagamentoColabDados = {
+  tipo: "Pagamento" | "Adiantamento";
+  valor: number;
+  meio: MeioPagamento;
+  referencia: string;
+};
+
+type LinhaRem = {
+  id: string; tipo: "Serviço" | "Ajuste"; servico_id: string | null; servico_codigo: string;
+  recebimento_id: string | null; colaborador_id: string; valor_elegivel: number; percentagem: number;
+  regra: string; valor: number; data: string; periodo: string; aprovada: boolean; motivo: string;
+};
+type LinhaPag = {
+  id: string; colaborador_id: string; tipo: "Pagamento" | "Adiantamento"; data: string; valor: number;
+  meio: MeioPagamento; referencia: string; utilizador_nome: string;
+};
+type LinhaCfg = {
+  id: number; percentagem_equipa: number; modalidade: ModalidadeDistribuicao; entrada_em_vigor: string;
+  accao: string; utilizador_nome: string; criado_em: string;
+};
+type LinhaQuota = { servico_id: string; colaborador_id: string; quota: number; definido_em: string; definido_por: string };
+type LinhaPeriodo = { periodo: string };
+
+type Ctx = {
+  config: ConfigRemuneracao;
+  remuneracoes: Remuneracao[];
+  pagamentos: PagamentoColaborador[];
+  periodosFechados: string[];
+  quotas: Record<string, QuotaServico>;
+  carregado: boolean;
+  erro: string;
+  apurar: () => Promise<ResultadoApuramento>;
+  aprovarPeriodo: (periodo: string) => Promise<Resultado & { n?: number }>;
+  fecharPeriodo: (periodo: string) => Promise<Resultado>;
+  registarPagamento: (colaboradorId: string, dados: PagamentoColabDados) => Promise<Resultado>;
+  registarAjuste: (colaboradorId: string, valor: number, motivo: string) => Promise<Resultado>;
+  alterarConfig: (percentagem: number, modalidade: ModalidadeDistribuicao) => Promise<Resultado>;
+  definirQuotas: (servicoId: string, quotas: Record<string, number>) => Promise<Resultado>;
+};
+
+const RemuneracoesContext = createContext<Ctx | null>(null);
+
+const OCUPADO: Resultado = { ok: false, erro: "Operação em curso. Aguarde." };
+const configInicial: ConfigRemuneracao = {
+  percentagemEquipa: 40, modalidade: "Divisão igual", entradaEmVigor: "2026-01-01", historico: [],
+};
+
+async function comTrinco<T>(trinco: { current: boolean }, ocupado: T, fn: () => Promise<T>): Promise<T> {
+  if (trinco.current) return ocupado;
+  trinco.current = true;
+  try {
+    return await fn();
+  } finally {
+    trinco.current = false;
+  }
+}
+
+export function RemuneracoesProvider({ children }: { children: React.ReactNode }) {
+  const { userId } = useAuth();
+  const [config, setConfig] = useState<ConfigRemuneracao>(configInicial);
+  const [remuneracoes, setRemuneracoes] = useState<Remuneracao[]>([]);
+  const [pagamentos, setPagamentos] = useState<PagamentoColaborador[]>([]);
+  const [periodosFechados, setPeriodosFechados] = useState<string[]>([]);
+  const [quotas, setQuotas] = useState<Record<string, QuotaServico>>({});
+  const [carregado, setCarregado] = useState(false);
+  const [erro, setErro] = useState("");
+  const emCurso = useRef(false);
+
+  const recarregar = useCallback(async (): Promise<boolean> => {
+    const [rem, pag, cfg, per, quo] = await Promise.all([
+      buscarTudo<LinhaRem>("remuneracoes", "criado_em"),
+      buscarTudo<LinhaPag>("pagamentos_colaboradores", "criado_em"),
+      buscarTudo<LinhaCfg>("config_remuneracao", "id"),
+      buscarTudo<LinhaPeriodo>("periodos_remuneracao", "periodo"),
+      buscarTudo<LinhaQuota>("quotas_servico", "servico_id"),
+    ]);
+    const falha = [rem, pag, cfg, per, quo].find((x) => x.error);
+    if (falha) {
+      setErro("Não foi possível carregar as remunerações: " + falha.error);
+      return false;
+    }
+    setErro("");
+
+    setRemuneracoes(
+      rem.data.map((l) => ({
+        id: l.id, tipo: l.tipo, servicoId: l.servico_id ?? "", servicoCodigo: l.servico_codigo,
+        recebimentoId: l.recebimento_id ?? "", colaboradorId: l.colaborador_id,
+        valorElegivel: Number(l.valor_elegivel), percentagem: Number(l.percentagem), regra: l.regra,
+        valor: Number(l.valor), data: l.data, periodo: l.periodo, aprovada: l.aprovada, motivo: l.motivo,
+      }))
+    );
+    setPagamentos(
+      pag.data.map((l) => ({
+        id: l.id, colaboradorId: l.colaborador_id, tipo: l.tipo, data: l.data, valor: Number(l.valor),
+        meio: l.meio, referencia: l.referencia, utilizador: l.utilizador_nome,
+      }))
+    );
+    setPeriodosFechados(per.data.map((p) => p.periodo));
+
+    if (cfg.data.length > 0) {
+      const ultima = cfg.data[cfg.data.length - 1];
+      setConfig({
+        percentagemEquipa: Number(ultima.percentagem_equipa),
+        modalidade: ultima.modalidade,
+        entradaEmVigor: ultima.entrada_em_vigor,
+        historico: cfg.data.map((c) => ({ id: "cf" + c.id, data: c.criado_em, utilizador: c.utilizador_nome, accao: c.accao })),
+      });
+    } else {
+      setConfig(configInicial);
+    }
+
+    const mapa: Record<string, QuotaServico> = {};
+    for (const q of quo.data) {
+      if (!mapa[q.servico_id]) mapa[q.servico_id] = { quotas: {}, data: q.definido_em.slice(0, 10), utilizador: q.definido_por };
+      mapa[q.servico_id].quotas[q.colaborador_id] = Number(q.quota);
+    }
+    setQuotas(mapa);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    let activo = true;
+    (async () => {
+      await recarregar();
+      if (activo) setCarregado(true);
+    })();
+    return () => {
+      activo = false;
+    };
+  }, [userId, recarregar]);
+
+  const apurar = useCallback(
+    () =>
+      comTrinco<ResultadoApuramento>(
+        emCurso,
+        { criadas: 0, avisos: [], erro: "Operação em curso. Aguarde." },
+        async () => {
+          const { data, error } = await getSupabase().rpc("apurar_remuneracoes");
+          if (error) return { criadas: 0, avisos: [], erro: traduzirErro(error) };
+          const r = data as unknown as { criadas: number; avisos: string[] | null };
+          await recarregar();
+          return { criadas: r.criadas, avisos: r.avisos ?? [] };
+        }
+      ),
+    [recarregar]
+  );
+
+  const aprovarPeriodo = useCallback(
+    (periodo: string) =>
+      comTrinco<Resultado & { n?: number }>(emCurso, OCUPADO, async () => {
+        const { data, error } = await getSupabase().rpc("aprovar_periodo", { p_periodo: periodo });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await recarregar();
+        return { ok: true, n: Number(data) };
+      }),
+    [recarregar]
+  );
+
+  const fecharPeriodo = useCallback(
+    (periodo: string) =>
+      comTrinco<Resultado>(emCurso, OCUPADO, async () => {
+        const { error } = await getSupabase().rpc("fechar_periodo", { p_periodo: periodo });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await recarregar();
+        return { ok: true };
+      }),
+    [recarregar]
+  );
+
+  const registarPagamento = useCallback(
+    (colaboradorId: string, dados: PagamentoColabDados) =>
+      comTrinco<Resultado>(emCurso, OCUPADO, async () => {
+        if (!colaboradorId) return { ok: false, erro: "Seleccione o colaborador." };
+        if (!(dados.valor > 0)) return { ok: false, erro: "Indique um valor superior a zero." };
+        const { error } = await getSupabase().rpc("registar_pagamento_colaborador", {
+          p_colaborador: colaboradorId,
+          p_tipo: dados.tipo,
+          p_valor: dados.valor,
+          p_meio: dados.meio,
+          p_referencia: dados.referencia,
+        });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await recarregar();
+        return { ok: true };
+      }),
+    [recarregar]
+  );
+
+  const registarAjuste = useCallback(
+    (colaboradorId: string, valor: number, motivo: string) =>
+      comTrinco<Resultado>(emCurso, OCUPADO, async () => {
+        if (!colaboradorId) return { ok: false, erro: "Seleccione o colaborador." };
+        if (!valor || Number.isNaN(valor)) return { ok: false, erro: "Indique um valor diferente de zero (negativo para deduzir)." };
+        const { error } = await getSupabase().rpc("registar_ajuste", {
+          p_colaborador: colaboradorId,
+          p_valor: valor,
+          p_motivo: motivo,
+        });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await recarregar();
+        return { ok: true };
+      }),
+    [recarregar]
+  );
+
+  const alterarConfig = useCallback(
+    (percentagem: number, modalidade: ModalidadeDistribuicao) =>
+      comTrinco<Resultado>(emCurso, OCUPADO, async () => {
+        if (Number.isNaN(percentagem) || percentagem < 0 || percentagem > 100)
+          return { ok: false, erro: "A percentagem da equipa deve estar entre 0 e 100." };
+        const { error } = await getSupabase().rpc("alterar_config_remuneracao", {
+          p_percentagem: percentagem,
+          p_modalidade: modalidade,
+        });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await recarregar();
+        return { ok: true };
+      }),
+    [recarregar]
+  );
+
+  const definirQuotas = useCallback(
+    (servicoId: string, q: Record<string, number>) =>
+      comTrinco<Resultado>(emCurso, OCUPADO, async () => {
+        if (!servicoId) return { ok: false, erro: "Seleccione o serviço." };
+        for (const v of Object.values(q)) {
+          if (typeof v !== "number" || Number.isNaN(v) || v < 0)
+            return { ok: false, erro: "Indique uma quota válida (0 ou mais) para cada colaborador." };
+        }
+        const { error } = await getSupabase().rpc("definir_quotas", { p_servico: servicoId, p_quotas: q });
+        if (error) return { ok: false, erro: traduzirErro(error) };
+        await recarregar();
+        return { ok: true };
+      }),
+    [recarregar]
+  );
+
+  const valor = useMemo(
+    () => ({
+      config, remuneracoes, pagamentos, periodosFechados, quotas, carregado, erro,
+      apurar, aprovarPeriodo, fecharPeriodo, registarPagamento, registarAjuste, alterarConfig, definirQuotas,
+    }),
+    [config, remuneracoes, pagamentos, periodosFechados, quotas, carregado, erro, apurar, aprovarPeriodo, fecharPeriodo, registarPagamento, registarAjuste, alterarConfig, definirQuotas]
+  );
+
+  return (
+    <RemuneracoesContext.Provider value={valor}>
+      {erro && <div className="fixed inset-x-0 top-0 z-50 bg-red-600 p-2 text-center text-sm text-white">{erro}</div>}
+      {children}
+    </RemuneracoesContext.Provider>
+  );
+}
+
+export function useRemuneracoes() {
+  const ctx = useContext(RemuneracoesContext);
+  if (!ctx) throw new Error("useRemuneracoes deve ser usado dentro de RemuneracoesProvider");
+  return ctx;
+}
+
+##### FICHEIRO src\app\(app)\servicos\[id]\page.tsx #####
+"use client";
+
+import { use, useState } from "react";
+import Link from "next/link";
+import { ArrowLeft, Pencil } from "lucide-react";
+import PageHeader from "@/components/ui/PageHeader";
+import StatusBadge from "@/components/ui/StatusBadge";
+import { useClientes } from "@/components/clientes/ClientesProvider";
+import { useServicos } from "@/components/servicos/ServicosProvider";
+import {
+  estadoFinanceiro, formatDataHora, formatDuracao, meiosPagamento, saldoPendente, totalRecebido, transicoes,
+} from "@/lib/servicos";
+import type { EstadoOperacional, MeioPagamento } from "@/lib/types";
+import { formatData, formatKz } from "@/lib/format";
+
+const campo =
+  "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
+
+export default function DetalheServicoPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const { obterServico, colaboradores, mudarEstado, registarPagamento, carregado } = useServicos();
+  const { obter } = useClientes();
+  const servico = obterServico(id);
+
+  const [erroEstado, setErroEstado] = useState("");
+  const [cancelando, setCancelando] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [valorPag, setValorPag] = useState("");
+  const [meio, setMeio] = useState<MeioPagamento>("Dinheiro");
+  const [referencia, setReferencia] = useState("");
+  const [erroPag, setErroPag] = useState("");
+
+  if (!carregado) return <p className="text-sm text-slate-500">A carregar...</p>;
+
+  if (!servico) {
+    return (
+      <>
+        <PageHeader title="Serviço não encontrado" />
+        <Link href="/servicos" className="text-sm font-medium text-brand-700 hover:underline">Voltar aos serviços</Link>
+      </>
+    );
+  }
+
+  const cliente = obter(servico.clienteId);
+  const recebido = totalRecebido(servico);
+  const saldo = saldoPendente(servico);
+  const proximos = transicoes[servico.estadoOperacional];
+  const editavel = servico.estadoOperacional !== "Concluído" && servico.estadoOperacional !== "Cancelado";
+  const equipa = servico.colaboradorIds.map((cid) => colaboradores.find((c) => c.id === cid)?.nome ?? cid);
+
+  async function transitar(novo: EstadoOperacional) {
+    if (!servico) return;
+    if (novo === "Cancelado") {
+      setCancelando(true);
+      setErroEstado("");
+      return;
+    }
+    const r = await mudarEstado(servico.id, novo);
+    setErroEstado(r.ok ? "" : r.erro ?? "Erro.");
+  }
+
+  async function confirmarCancelamento() {
+    if (!servico) return;
+    const r = await mudarEstado(servico.id, "Cancelado", motivo);
+    if (r.ok) {
+      setCancelando(false);
+      setMotivo("");
+      setErroEstado("");
+    } else {
+      setErroEstado(r.erro ?? "Erro.");
+    }
+  }
+
+  async function guardarPagamento(e: React.FormEvent) {
+    e.preventDefault();
+    if (!servico) return;
+    const valor = Number(valorPag.replace(",", "."));
+    const r = await registarPagamento(servico.id, { valor, meio, referencia });
+    if (r.ok) {
+      setValorPag("");
+      setReferencia("");
+      setErroPag("");
+    } else {
+      setErroPag(r.erro ?? "Erro.");
+    }
+  }
+
+  return (
+    <>
+      <Link href="/servicos" className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900">
+        <ArrowLeft className="h-4 w-4" /> Serviços
+      </Link>
+
+      <PageHeader
+        title={servico.codigo}
+        description={`${servico.tipoServico} · criado em ${formatData(servico.dataCriacao.slice(0, 10))}`}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusBadge status={servico.estadoOperacional} />
+            <StatusBadge status={estadoFinanceiro(servico)} />
+            {editavel && (
+              <Link href={`/servicos/${servico.id}/editar`} className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">
+                <Pencil className="h-4 w-4" /> Editar
+              </Link>
+            )}
+          </div>
+        }
+      />
+
+      <div className="mb-6 grid gap-6 lg:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+          <h2 className="mb-4 font-semibold text-slate-900">Dados do serviço</h2>
+          <dl className="grid gap-4 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-xs text-slate-500">Cliente</dt>
+              <dd>
+                {cliente ? (
+                  <Link href={`/clientes/${cliente.id}`} className="font-medium text-brand-700 hover:underline">{cliente.nome}</Link>
+                ) : "—"}
+              </dd>
+            </div>
+            <div><dt className="text-xs text-slate-500">Telefone</dt><dd>{cliente?.telefone ?? "—"}</dd></div>
+            <div>
+              <dt className="text-xs text-slate-500">Data e hora</dt>
+              <dd>{servico.data ? `${formatData(servico.data)} às ${servico.hora}` : "Por agendar"} · {formatDuracao(servico.duracaoMin)}</dd>
+            </div>
+            <div><dt className="text-xs text-slate-500">Local</dt><dd>{servico.local || "—"}</dd></div>
+            <div><dt className="text-xs text-slate-500">Quantidade</dt><dd>{servico.quantidade}</dd></div>
+            <div><dt className="text-xs text-slate-500">Preço unitário</dt><dd>{formatKz(servico.precoUnitario)}</dd></div>
+            <div><dt className="text-xs text-slate-500">Desconto</dt><dd>{formatKz(servico.desconto)}</dd></div>
+            <div><dt className="text-xs text-slate-500">Valor total</dt><dd className="font-semibold">{formatKz(servico.total)}</dd></div>
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-slate-500">Equipa</dt>
+              <dd>{equipa.length ? equipa.join(", ") : "Sem equipa atribuída"}</dd>
+              {servico.excepcaoConflito && <p className="mt-1 text-xs text-amber-700">Excepção de conflito de horário autorizada.</p>}
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-slate-500">Descrição</dt>
+              <dd>{servico.descricao || "—"}</dd>
+            </div>
+            <div className="sm:col-span-2">
+              <dt className="text-xs text-slate-500">Observações</dt>
+              <dd>{servico.observacoes || "—"}</dd>
+            </div>
+            {servico.estadoOperacional === "Cancelado" && (
+              <div className="sm:col-span-2 rounded-lg bg-red-50 p-3 text-red-800">
+                <dt className="text-xs">Motivo do cancelamento</dt>
+                <dd>{servico.motivoCancelamento}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 font-semibold text-slate-900">Estado do serviço</h2>
+            {proximos.length === 0 ? (
+              <p className="text-sm text-slate-500">Este serviço está num estado final.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {proximos.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => transitar(p)}
+                    className={`rounded-lg px-3 py-2 text-left text-sm font-medium ${
+                      p === "Cancelado"
+                        ? "border border-red-300 text-red-700 hover:bg-red-50"
+                        : "bg-brand-600 text-white hover:bg-brand-700"
+                    }`}
+                  >
+                    {p === "Cancelado" ? "Cancelar serviço" : `Passar a "${p}"`}
+                  </button>
+                ))}
+              </div>
+            )}
+            {cancelando && (
+              <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
+                <label className="text-sm font-medium text-red-800">Motivo do cancelamento *</label>
+                <textarea className={campo} rows={2} value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+                <div className="mt-2 flex gap-2">
+                  <button onClick={confirmarCancelamento} className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700">Confirmar cancelamento</button>
+                  <button onClick={() => { setCancelando(false); setErroEstado(""); }} className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700">Voltar</button>
+                </div>
+              </div>
+            )}
+            {erroEstado && <p className="mt-3 text-sm text-red-600">{erroEstado}</p>}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 font-semibold text-slate-900">Financeiro</h2>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between"><span className="text-slate-500">Valor total</span><span className="font-medium">{formatKz(servico.total)}</span></div>
+              <div className="flex justify-between"><span className="text-slate-500">Recebido</span><span className="font-medium text-emerald-700">{formatKz(recebido)}</span></div>
+              <div className="flex justify-between border-t border-slate-100 pt-3">
+                <span className="text-slate-500">Saldo pendente</span>
+                <span className={`font-semibold ${saldo > 0 ? "text-amber-700" : "text-slate-900"}`}>{formatKz(saldo)}</span>
+              </div>
+              {servico.estadoOperacional === "Cancelado" && recebido > 0 && (
+                <p className="rounded-lg bg-red-50 p-2 text-xs text-red-800">
+                  Serviço cancelado com {formatKz(recebido)} recebidos: reembolso pendente.
+                </p>
+              )}
+            </div>
+
+            {saldo > 0 && (
+              <form onSubmit={guardarPagamento} noValidate className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                <p className="text-sm font-medium text-slate-700">Registar recebimento</p>
+                <input className={campo} inputMode="decimal" placeholder={`Valor (máx. ${formatKz(saldo)})`} value={valorPag} onChange={(e) => setValorPag(e.target.value)} />
+                <select className={campo} value={meio} onChange={(e) => setMeio(e.target.value as MeioPagamento)}>
+                  {meiosPagamento.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <input className={campo} placeholder="Referência (opcional)" value={referencia} onChange={(e) => setReferencia(e.target.value)} />
+                {erroPag && <p className="text-sm text-red-600">{erroPag}</p>}
+                <button type="submit" className="w-full rounded-lg bg-emerald-600 py-2 text-sm font-medium text-white hover:bg-emerald-700">Registar recebimento</button>
+              </form>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-6 rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-semibold text-slate-900">Recebimentos</h2></div>
+        {servico.recebimentos.length === 0 ? (
+          <p className="p-6 text-center text-sm text-slate-500">Ainda não foram registados recebimentos.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-5 py-3 font-medium">Data</th>
+                  <th className="px-5 py-3 font-medium">Valor</th>
+                  <th className="px-5 py-3 font-medium">Meio</th>
+                  <th className="px-5 py-3 font-medium">Referência</th>
+                  <th className="px-5 py-3 font-medium">Registado por</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {servico.recebimentos.map((r) => (
+                  <tr key={r.id}>
+                    <td className="whitespace-nowrap px-5 py-3">{formatData(r.data)}</td>
+                    <td className="whitespace-nowrap px-5 py-3 font-medium">{formatKz(r.valor)}</td>
+                    <td className="px-5 py-3">{r.meio}</td>
+                    <td className="px-5 py-3">{r.referencia || "—"}</td>
+                    <td className="px-5 py-3">{r.utilizador}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-semibold text-slate-900">Histórico de alterações</h2></div>
+        <ul className="divide-y divide-slate-100">
+          {[...servico.historico].reverse().map((h) => (
+            <li key={h.id} className="px-5 py-3 text-sm">
+              <p className="text-slate-900">{h.accao}</p>
+              <p className="text-xs text-slate-500">{formatDataHora(h.data)} · {h.utilizador}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </>
+  );
+}
+
+##### FICHEIRO src\app\(app)\servicos\catalogo\page.tsx #####
+"use client";
+
+import { useRef, useState } from "react";
+import Link from "next/link";
+import { ArrowLeft, Plus } from "lucide-react";
+import PageHeader from "@/components/ui/PageHeader";
+import { useServicos, type Resultado } from "@/components/servicos/ServicosProvider";
+import { formatDuracao } from "@/lib/servicos";
+import { formatKz } from "@/lib/format";
+
+const campo =
+  "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100";
+
+type F = { nome: string; descricao: string; unidade: string; preco: string; duracao: string };
+const vazio: F = { nome: "", descricao: "", unidade: "unidade", preco: "", duracao: "60" };
+
+export default function CatalogoPage() {
+  const { catalogo, adicionarCatalogo, actualizarCatalogo, alternarCatalogo } = useServicos();
+  const [aberto, setAberto] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [f, setF] = useState<F>(vazio);
+  const [erro, setErro] = useState("");
+  const [aviso, setAviso] = useState("");
+  const aGuardar = useRef(false);
+
+  function novo() {
+    setEditId(null);
+    setF(vazio);
+    setErro("");
+    setAviso("");
+    setAberto(true);
+  }
+
+  function editar(id: string) {
+    const c = catalogo.find((x) => x.id === id);
+    if (!c) return;
+    setEditId(id);
+    setF({ nome: c.nome, descricao: c.descricao, unidade: c.unidade, preco: String(c.preco), duracao: String(c.duracaoMin) });
+    setErro("");
+    setAviso("");
+    setAberto(true);
+  }
+
+  async function guardar(e: React.FormEvent) {
+    e.preventDefault();
+    if (aGuardar.current) return;
+    const preco = Number(f.preco.replace(",", "."));
+    const duracao = Math.round(Number(f.duracao));
+    if (!f.nome.trim()) return setErro("Indique o nome do serviço.");
+    if (f.preco.trim() === "" || Number.isNaN(preco) || preco < 0) return setErro("Indique um preço de referência válido.");
+    if (!(duracao > 0)) return setErro("Indique a duração estimada em minutos.");
+    const dados = {
+      nome: f.nome.trim(), descricao: f.descricao.trim(), unidade: f.unidade.trim() || "unidade",
+      preco, duracaoMin: duracao, activo: true,
+    };
+    aGuardar.current = true;
+    let r: Resultado;
+    if (editId) {
+      const actual = catalogo.find((x) => x.id === editId);
+      r = await actualizarCatalogo(editId, { ...dados, activo: actual ? actual.activo : true });
+    } else {
+      r = await adicionarCatalogo(dados);
+    }
+    aGuardar.current = false;
+    if (!r.ok) return setErro(r.erro ?? "Erro.");
+    setAberto(false);
+    setEditId(null);
+    setF(vazio);
+    setErro("");
+  }
+
+  async function alternar(id: string) {
+    setAviso("");
+    const r = await alternarCatalogo(id);
+    if (!r.ok) setAviso(r.erro ?? "Erro.");
+  }
+
+  return (
+    <>
+      <Link href="/servicos" className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900">
+        <ArrowLeft className="h-4 w-4" /> Serviços
+      </Link>
+
+      <PageHeader
+        title="Catálogo de serviços"
+        description="Os preços de referência não alteram ordens de serviço já criadas. Só a administração edita o catálogo."
+        action={
+          <button onClick={novo} className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">
+            <Plus className="h-4 w-4" /> Novo serviço
+          </button>
+        }
+      />
+
+      {aviso && <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{aviso}</p>}
+
+      {aberto && (
+        <form onSubmit={guardar} noValidate className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 font-semibold text-slate-900">{editId ? "Editar serviço" : "Novo serviço"}</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="text-sm font-medium text-slate-700">Nome *</label>
+              <input className={campo} value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="text-sm font-medium text-slate-700">Descrição</label>
+              <input className={campo} value={f.descricao} onChange={(e) => setF({ ...f, descricao: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700">Unidade de cobrança</label>
+              <input className={campo} value={f.unidade} onChange={(e) => setF({ ...f, unidade: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700">Preço de referência (Kz) *</label>
+              <input className={campo} inputMode="decimal" value={f.preco} onChange={(e) => setF({ ...f, preco: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-slate-700">Duração estimada (min) *</label>
+              <input className={campo} inputMode="numeric" value={f.duracao} onChange={(e) => setF({ ...f, duracao: e.target.value })} />
+            </div>
+          </div>
+          {erro && <p className="mt-3 text-sm text-red-600">{erro}</p>}
+          <div className="mt-4 flex justify-end gap-3">
+            <button type="button" onClick={() => setAberto(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Cancelar</button>
+            <button type="submit" className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700">Guardar</button>
+          </div>
+        </form>
+      )}
+
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                <th className="px-5 py-3 font-medium">Código</th>
+                <th className="px-5 py-3 font-medium">Nome</th>
+                <th className="px-5 py-3 font-medium">Unidade</th>
+                <th className="px-5 py-3 font-medium">Preço de referência</th>
+                <th className="px-5 py-3 font-medium">Duração</th>
+                <th className="px-5 py-3 font-medium">Estado</th>
+                <th className="px-5 py-3 font-medium">Acções</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {catalogo.map((c) => (
+                <tr key={c.id} className="hover:bg-slate-50">
+                  <td className="whitespace-nowrap px-5 py-3 font-medium text-slate-900">{c.codigo}</td>
+                  <td className="px-5 py-3">
+                    {c.nome}
+                    {c.descricao && <p className="text-xs text-slate-500">{c.descricao}</p>}
+                  </td>
+                  <td className="px-5 py-3">{c.unidade}</td>
+                  <td className="whitespace-nowrap px-5 py-3">{formatKz(c.preco)}</td>
+                  <td className="whitespace-nowrap px-5 py-3">{formatDuracao(c.duracaoMin)}</td>
+                  <td className="px-5 py-3">
+                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${c.activo ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-slate-100 text-slate-600 ring-slate-200"}`}>
+                      {c.activo ? "Activo" : "Inactivo"}
+                    </span>
+                  </td>
+                  <td className="whitespace-nowrap px-5 py-3">
+                    <button onClick={() => editar(c.id)} className="mr-3 text-sm font-medium text-brand-700 hover:underline">Editar</button>
+                    <button onClick={() => alternar(c.id)} className="text-sm font-medium text-slate-600 hover:underline">
+                      {c.activo ? "Desactivar" : "Activar"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {catalogo.length === 0 && <p className="p-8 text-center text-sm text-slate-500">Catálogo vazio.</p>}
+      </div>
+    </>
+  );
+}
+
+##### FICHEIRO src\app\(app)\colaboradores\[id]\page.tsx #####
+"use client";
+
+import { use } from "react";
+import Link from "next/link";
+import { ArrowLeft, Pencil, Phone, Briefcase, CalendarDays, FileText } from "lucide-react";
+import PageHeader from "@/components/ui/PageHeader";
+import StatusBadge from "@/components/ui/StatusBadge";
+import EstadoColabBadge from "@/components/colaboradores/EstadoColabBadge";
+import { useColaboradores } from "@/components/colaboradores/ColaboradoresProvider";
+import { useServicos } from "@/components/servicos/ServicosProvider";
+import { useRemuneracoes } from "@/components/remuneracoes/RemuneracoesProvider";
+import { saldoColaborador } from "@/lib/remuneracoes";
+import { formatData, formatKz } from "@/lib/format";
+import type { EstadoColaborador } from "@/lib/types";
+
+export default function FichaColaboradorPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const { obter, alterarEstado, carregado } = useColaboradores();
+  const { servicos } = useServicos();
+  const { remuneracoes, pagamentos } = useRemuneracoes();
+  const c = obter(id);
+
+  if (!carregado) return <p className="text-sm text-slate-500">A carregar...</p>;
+  if (!c) {
+    return (
+      <>
+        <PageHeader title="Colaborador não encontrado" />
+        <Link href="/colaboradores" className="text-sm font-medium text-brand-700 hover:underline">Voltar à lista</Link>
+      </>
+    );
+  }
+
+  const s = saldoColaborador(c.id, remuneracoes, pagamentos);
+  const meus = servicos.filter((x) => x.colaboradorIds.includes(c.id)).sort((a, b) => b.codigo.localeCompare(a.codigo));
+  const meusPagamentos = pagamentos.filter((p) => p.colaboradorId === c.id).sort((a, b) => b.data.localeCompare(a.data));
+  const estados: EstadoColaborador[] = ["Activo", "Inactivo", "Suspenso"];
+
+  return (
+    <>
+      <Link href="/colaboradores" className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-900">
+        <ArrowLeft className="h-4 w-4" /> Colaboradores
+      </Link>
+      <PageHeader
+        title={c.nome}
+        description={`${c.codigo} · ${c.funcao}`}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <EstadoColabBadge estado={c.estado} />
+            <Link href={`/colaboradores/${c.id}/editar`} className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700">
+              <Pencil className="h-4 w-4" /> Editar
+            </Link>
+          </div>
+        }
+      />
+
+      <div className="mb-6 grid gap-6 lg:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+          <h2 className="mb-4 font-semibold text-slate-900">Dados do colaborador</h2>
+          <dl className="space-y-3 text-sm">
+            <div className="flex items-start gap-3"><Phone className="mt-0.5 h-4 w-4 text-slate-400" /><div><dt className="text-xs text-slate-500">Telefone</dt><dd>{c.telefone}</dd></div></div>
+            <div className="flex items-start gap-3"><Briefcase className="mt-0.5 h-4 w-4 text-slate-400" /><div><dt className="text-xs text-slate-500">Modalidade</dt><dd>{c.modalidade}</dd></div></div>
+            <div className="flex items-start gap-3"><FileText className="mt-0.5 h-4 w-4 text-slate-400" /><div><dt className="text-xs text-slate-500">Referência do contrato</dt><dd>{c.contrato || "—"}</dd></div></div>
+            <div className="flex items-start gap-3"><CalendarDays className="mt-0.5 h-4 w-4 text-slate-400" /><div><dt className="text-xs text-slate-500">Início da relação</dt><dd>{c.dataInicio ? formatData(c.dataInicio) : "—"}</dd></div></div>
+            <div className="border-t border-slate-100 pt-3"><dt className="text-xs text-slate-500">Percentagem individual</dt><dd>{c.percentagem}%</dd></div>
+            <div><dt className="text-xs text-slate-500">Observações</dt><dd>{c.observacoes || "Sem observações."}</dd></div>
+          </dl>
+          <div className="mt-5 border-t border-slate-100 pt-4">
+            <p className="mb-2 text-xs text-slate-500">Alterar estado (o histórico nunca é apagado)</p>
+            <div className="flex flex-wrap gap-2">
+              {estados.map((e) => (
+                <button key={e} disabled={c.estado === e} onClick={async () => { const r = await alterarEstado(c.id, e); if (!r.ok) alert(r.erro); }}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400">
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 font-semibold text-slate-900">Remuneração</h2>
+          <div className="space-y-3 text-sm">
+            <div className="flex justify-between"><span className="text-slate-500">Total apurado</span><span className="font-medium">{formatKz(s.apurado)}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">Aprovado</span><span className="font-medium">{formatKz(s.aprovado)}</span></div>
+            <div className="flex justify-between"><span className="text-slate-500">Já pago</span><span className="font-medium text-emerald-700">{formatKz(s.pago)}</span></div>
+            <div className="flex justify-between border-t border-slate-100 pt-3">
+              <span className="text-slate-500">Saldo devido</span>
+              <span className={`font-semibold ${s.saldo > 0 ? "text-amber-700" : "text-slate-900"}`}>{formatKz(s.saldo)}</span>
+            </div>
+          </div>
+          <Link href="/remuneracoes" className="mt-4 inline-block text-sm font-medium text-brand-700 hover:underline">Ir para Remunerações</Link>
+        </div>
+      </div>
+
+      <div className="mb-6 rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-semibold text-slate-900">Histórico de serviços</h2></div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                <th className="px-5 py-3 font-medium">Código</th>
+                <th className="px-5 py-3 font-medium">Serviço</th>
+                <th className="px-5 py-3 font-medium">Data</th>
+                <th className="px-5 py-3 font-medium">Estado</th>
+                <th className="px-5 py-3 font-medium">Remuneração apurada</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {meus.map((x) => (
+                <tr key={x.id} className="hover:bg-slate-50">
+                  <td className="whitespace-nowrap px-5 py-3"><Link href={`/servicos/${x.id}`} className="font-medium text-brand-700 hover:underline">{x.codigo}</Link></td>
+                  <td className="px-5 py-3">{x.tipoServico}</td>
+                  <td className="whitespace-nowrap px-5 py-3">{x.data ? formatData(x.data) : "—"}</td>
+                  <td className="px-5 py-3"><StatusBadge status={x.estadoOperacional} /></td>
+                  <td className="whitespace-nowrap px-5 py-3">{formatKz(remuneracoes.filter((r) => r.colaboradorId === c.id && r.servicoId === x.id).reduce((t, r) => t + r.valor, 0))}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {meus.length === 0 && <p className="p-8 text-center text-sm text-slate-500">Ainda sem serviços atribuídos.</p>}
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-semibold text-slate-900">Pagamentos recebidos da empresa</h2></div>
+        {meusPagamentos.length === 0 ? (
+          <p className="p-8 text-center text-sm text-slate-500">Ainda sem pagamentos registados.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {meusPagamentos.map((p) => (
+              <li key={p.id} className="flex flex-wrap justify-between gap-2 px-5 py-3 text-sm">
+                <span>{formatData(p.data)} · {p.tipo} · {p.meio}{p.referencia ? ` · ${p.referencia}` : ""}</span>
+                <span className="font-medium">{formatKz(p.valor)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
+  );
+}
+
+##### FICHEIRO src\components\ui\Etiqueta.tsx #####
+const tons = {
+  verde: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  azul: "bg-blue-50 text-blue-700 ring-blue-200",
+  ambar: "bg-amber-50 text-amber-700 ring-amber-200",
+  vermelho: "bg-red-50 text-red-700 ring-red-200",
+  cinza: "bg-slate-100 text-slate-700 ring-slate-200",
+};
+
+export type Tom = keyof typeof tons;
+
+export default function Etiqueta({ texto, tom = "cinza" }: { texto: string; tom?: Tom }) {
+  return (
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${tons[tom]}`}>
+      {texto}
+    </span>
+  );
+}
+
+##### FICHEIRO src\components\ui\StatCard.tsx #####
+import type { LucideIcon } from "lucide-react";
+
+const tons = {
+  dourado: "bg-brand-50 text-brand-600",
+  azul: "bg-blue-50 text-blue-600",
+  roxo: "bg-violet-50 text-violet-600",
+  verde: "bg-emerald-50 text-emerald-600",
+  ambar: "bg-amber-50 text-amber-600",
+  vermelho: "bg-red-50 text-red-600",
+};
+
+export type TomCartao = keyof typeof tons;
+
+export default function StatCard({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tom = "dourado",
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  icon: LucideIcon;
+  tom?: TomCartao;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-4">
+        <div className={`rounded-xl p-3 ${tons[tom]}`}>
+          <Icon className="h-6 w-6" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-slate-500">{label}</p>
+          <p className="truncate text-2xl font-semibold text-slate-900">{value}</p>
+        </div>
+      </div>
+      {hint && <p className="mt-3 text-xs text-slate-500">{hint}</p>}
+    </div>
+  );
+}
+
+##### FICHEIRO src\components\ui\PageHeader.tsx #####
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { navItems } from "@/lib/nav";
+
+export default function PageHeader({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const base = "/" + (pathname.split("/")[1] ?? "");
+  const modulo = navItems.find((i) => i.href === base);
+
+  return (
+    <div className="no-print mb-6 flex flex-wrap items-start justify-between gap-3">
+      <div>
+        {modulo && (
+          <p className="mb-1 text-xs text-slate-500">
+            <Link href="/painel" className="hover:underline">Início</Link>
+            {" / "}
+            {pathname === modulo.href ? modulo.label : <Link href={modulo.href} className="hover:underline">{modulo.label}</Link>}
+          </p>
+        )}
+        <h1 className="text-2xl font-semibold text-slate-900">{title}</h1>
+        {description && <p className="mt-1 text-sm text-slate-500">{description}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+##### USO DE valorElegivel / valor_elegivel #####
+[src\app\(app)\documentos\ver\[tipo]\[id]\page.tsx:158] <td className={td}>{r.tipo === "Serviço" ? formatKz(r.valorElegivel) : "—"}</td>
+[src\app\(app)\remuneracoes\page.tsx:323] <td className="whitespace-nowrap px-5 py-3">{r.tipo === "Serviço" ? formatKz(r.valorElegivel) : "—"}</td>
+[src\components\remuneracoes\RemuneracoesProvider.tsx:24] recebimento_id: string | null; colaborador_id: string; valor_elegivel: number; percentagem: number;
+[src\components\remuneracoes\RemuneracoesProvider.tsx:102] valorElegivel: Number(l.valor_elegivel), percentagem: Number(l.percentagem), regra: l.regra,
+[src\lib\remuneracoes.ts:11] valorElegivel: number,
+[src\lib\remuneracoes.ts:19] const total = Math.round((valorElegivel * config.percentagemEquipa) / 100);
+[src\lib\remuneracoes.ts:45] const total = Math.round((valorElegivel * config.percentagemEquipa) / 100);
+[src\lib\remuneracoes.ts:68] valor: Math.round((valorElegivel * c.percentagem) / 100),
+[src\lib\types.ts:137] valorElegivel: number;

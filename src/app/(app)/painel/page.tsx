@@ -102,7 +102,7 @@ export default function PainelPage() {
           <p className="mt-1 text-sm text-slate-500">Aqui está um resumo da actividade do Grupo Galedos.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-sm capitalize text-slate-500">{data}</span>
+          <span className="inline-block text-sm text-slate-500 first-letter:uppercase">{data}</span>
           <select className={seletor} value={periodo} onChange={(e) => setPeriodo(e.target.value as PeriodoChave)}>
             {periodosOpcoes.map((p) => <option key={p.chave} value={p.chave}>{p.label}</option>)}
           </select>

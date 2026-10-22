@@ -474,7 +474,7 @@ export default function AdminPresencas() {
             </div>
             {resumo.length === 0 && <p className="p-8 text-center text-sm text-slate-500">Sem dados.</p>}
             <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
-              Atrasos, faltas e saídas em falta são informação para a administração decidir. Não geram descontos automáticos. Os dias de falta (sem entrada) serão acrescentados com o módulo de ausências.
+              Atrasos, faltas e saídas em falta são informação para a administração decidir. Não geram descontos automáticos. Os dias de falta e as ausências (férias, baixas) estão em Ausências, separador Faltas do mês.
             </p>
           </div>
         </>

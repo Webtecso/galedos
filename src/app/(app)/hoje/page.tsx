@@ -12,6 +12,7 @@ import {
   dataLuanda, formatMin, horaLuanda, minutosEntre, minutosTrabalhados, obterPosicao, type Presenca,
 } from "@/lib/presenca";
 import { formatData } from "@/lib/format";
+import PainelExecucao from "@/components/execucao/PainelExecucao";
 
 type Servico = {
   id: string; codigo: string; tipo: string; descricao: string; quantidade: number; data: string; hora: string;
@@ -201,6 +202,10 @@ export default function HojePage() {
           {s.descricao && <p>{s.descricao}</p>}
           {s.observacoes && <p className="text-slate-500">Obs.: {s.observacoes}</p>}
         </div>
+
+        {(!!s.chegada_em || !!s.inicio_em) && s.estado !== "Concluído" && (
+          <PainelExecucao servicoId={s.id} aberto={!terminado} terminado={terminado} />
+        )}
 
         {terminado && (
           <p className="mt-3 text-sm text-emerald-700">

@@ -15,10 +15,38 @@
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   background-color: #f3f5f9;
   color: #0f172a;
   -webkit-font-smoothing: antialiased;
+  min-width: 0;
+}
+
+/* Um item de grelha não pode ser mais largo que o ecrã por causa de uma tabela larga:
+   a tabela desliza dentro do seu cartão (overflow-x-auto) em vez de esticar a página. */
+.app-shell { max-width: 100%; overflow-x: clip; }
+.app-shell .grid > *,
+.app-shell .flex > * { min-width: 0; }
+.app-shell img, .app-shell canvas, .app-shell svg { max-width: 100%; }
+
+/* Zonas seguras (entalhe e barra inferior do iPhone) */
+.app-shell > main {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+  padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+}
+@media (min-width: 1024px) {
+  .app-shell > main { padding-left: 2rem; padding-right: 2rem; }
+}
+
+/* O iPhone faz zoom automático em campos com texto menor que 16px */
+@media (max-width: 767px) {
+  input, select, textarea { font-size: 16px !important; }
 }
 
 @media print {
