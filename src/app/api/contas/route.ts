@@ -27,7 +27,6 @@ export async function POST(req: Request) {
   const publico = createClient(url, chavePublica, opcoes);
   const admin = createClient(url, chaveServico, opcoes);
 
-  // Quem pede tem de ser um administrador activo
   const { data: quem, error: erroSessao } = await publico.auth.getUser(token);
   if (erroSessao || !quem.user) return falha("Sessão inválida. Entre de novo.", 401);
   const { data: eu } = await admin.from("perfis").select("perfil,activo").eq("id", quem.user.id).maybeSingle();
@@ -50,6 +49,8 @@ export async function POST(req: Request) {
     if (!existe) return falha("Conta não encontrada.", 404);
     const { error } = await admin.auth.admin.updateUserById(alvo, { password });
     if (error) return falha("Não foi possível alterar a palavra-passe.", 500);
+    // Quem recebe uma palavra-passe de outra pessoa tem de a mudar no primeiro acesso
+    await admin.from("perfis").update({ deve_mudar_password: alvo !== quem.user.id }).eq("id", alvo);
     return NextResponse.json({ ok: true });
   }
 
@@ -72,8 +73,7 @@ export async function POST(req: Request) {
     }
     const uid = criado.user.id;
 
-    // O perfil pode já ter sido criado por um gatilho da base de dados; senão, cria-se aqui.
-    const campos = { colaborador_id: colab.id, nome: colab.nome, perfil: "operacional", activo: true };
+    const campos = { colaborador_id: colab.id, nome: colab.nome, perfil: "operacional", activo: true, deve_mudar_password: true };
     const { data: actualizados, error: erroAct } = await admin.from("perfis").update(campos).eq("id", uid).select("id");
     let ligado = !erroAct && (actualizados?.length ?? 0) > 0;
     if (!ligado && !erroAct) {
@@ -81,7 +81,7 @@ export async function POST(req: Request) {
       ligado = !erroIns;
     }
     if (!ligado) {
-      await admin.auth.admin.deleteUser(uid); // não deixar contas soltas
+      await admin.auth.admin.deleteUser(uid);
       return falha("Não foi possível ligar a conta ao colaborador. Nada foi criado.", 500);
     }
     return NextResponse.json({ ok: true, user_id: uid });

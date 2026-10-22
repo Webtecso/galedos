@@ -12,15 +12,34 @@ export type Perfil = {
   perfil: PerfilUtilizador;
   activo: boolean;
   colaboradorId: string | null;
+  deveMudarPassword: boolean;
+  privacidadeAceite: boolean;
 };
 
-type Ctx = { userId: string; perfil: Perfil; sair: () => Promise<void> };
+type Ctx = { userId: string; perfil: Perfil; sair: () => Promise<void>; recarregar: () => Promise<void> };
 
 type LinhaPerfil = {
   id: string; email: string; nome: string; perfil: PerfilUtilizador; activo: boolean; colaborador_id: string | null;
+  deve_mudar_password: boolean; privacidade_aceite_em: string | null;
 };
 
 const AuthContext = createContext<Ctx | null>(null);
+
+async function lerPerfil(userId: string): Promise<Perfil | null> {
+  const { data, error } = await getSupabase()
+    .from("perfis")
+    .select("id,email,nome,perfil,activo,colaborador_id,deve_mudar_password,privacidade_aceite_em")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error || !data || !data.activo) return null;
+  const p = data as unknown as LinhaPerfil;
+  return {
+    id: p.id, email: p.email, nome: p.nome, perfil: p.perfil, activo: p.activo,
+    colaboradorId: p.colaborador_id,
+    deveMudarPassword: p.deve_mudar_password,
+    privacidadeAceite: !!p.privacidade_aceite_em,
+  };
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -38,22 +57,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         return;
       }
-      const { data, error } = await sb
-        .from("perfis")
-        .select("id,email,nome,perfil,activo,colaborador_id")
-        .eq("id", userId)
-        .maybeSingle();
+      const p = await lerPerfil(userId);
       if (!activo) return;
-      if (error || !data || !data.activo) {
+      if (!p) {
         await sb.auth.signOut();
         router.replace("/login?motivo=sem-acesso");
         return;
       }
-      const p = data as unknown as LinhaPerfil;
-      setPerfil({
-        id: p.id, email: p.email, nome: p.nome, perfil: p.perfil, activo: p.activo,
-        colaboradorId: p.colaborador_id,
-      });
+      setPerfil(p);
     }
 
     (async () => {
@@ -79,7 +90,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   }, [router]);
 
-  const valor = useMemo(() => (perfil ? { userId: perfil.id, perfil, sair } : null), [perfil, sair]);
+  const recarregar = useCallback(async () => {
+    const { data } = await getSupabase().auth.getSession();
+    const id = data.session?.user.id;
+    if (!id) return;
+    const p = await lerPerfil(id);
+    if (p) setPerfil(p);
+  }, []);
+
+  const valor = useMemo(() => (perfil ? { userId: perfil.id, perfil, sair, recarregar } : null), [perfil, sair, recarregar]);
 
   if (!valor) {
     return (

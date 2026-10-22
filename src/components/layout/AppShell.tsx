@@ -13,10 +13,11 @@ const itens = navItems.filter((i) => i.href !== "/login");
 const rotulos = { administrador: "Administrador", gestao: "Gestão", operacional: "Operacional" } as const;
 
 function permitido(perfil: PerfilUtilizador, href: string, temColab: boolean): boolean {
+  if (href === "/conta") return true;
   if (href === "/pedidos") return perfil === "operacional" ? temColab : true;
   if (href === "/hoje" || href === "/meus-ganhos") return temColab;
   if (perfil === "administrador") return true;
-  if (perfil === "gestao") return !["/configuracoes", "/remuneracoes", "/financas", "/contas", "/servicos/checklists"].includes(href);
+  if (perfil === "gestao") return !["/configuracoes", "/remuneracoes", "/financas", "/contas", "/servicos/checklists", "/copia"].includes(href);
   return href === "/presencas";
 }
 
@@ -81,10 +82,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const base = "/" + (pathname.split("/")[1] ?? "");
   const bloqueado = !permitido(perfil.perfil, base, temColab);
   const inicio = operacional ? (temColab ? "/hoje" : "/presencas") : "/painel";
+  // Primeiro acesso: palavra-passe nova e aviso de privacidade antes de usar o resto
+  const precisaConta = !bloqueado && base !== "/conta" && (perfil.deveMudarPassword || (operacional && !perfil.privacidadeAceite));
 
   useEffect(() => {
     if (bloqueado) router.replace(inicio);
-  }, [bloqueado, inicio, router]);
+    else if (precisaConta) router.replace("/conta");
+  }, [bloqueado, precisaConta, inicio, router]);
 
   function pesquisar(e: React.FormEvent) {
     e.preventDefault();
@@ -96,7 +100,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  if (bloqueado) {
+  if (bloqueado || precisaConta) {
     return <div className="p-8 text-sm text-slate-500">A redireccionar...</div>;
   }
 

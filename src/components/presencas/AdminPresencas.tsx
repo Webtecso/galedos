@@ -18,6 +18,7 @@ import {
 } from "@/lib/presenca";
 import { formatData, formatPeriodo } from "@/lib/format";
 import DistanciaConfig from "./DistanciaConfig";
+import SelfieLink from "./SelfieLink";
 
 type Aba = "agora" | "registos" | "mapa" | "servicos" | "horario";
 type Msg = { tipo: "ok" | "erro"; texto: string } | null;
@@ -332,6 +333,7 @@ export default function AdminPresencas() {
                     <th className="px-5 py-3 font-medium">Entrada</th>
                     <th className="px-5 py-3 font-medium">Situação</th>
                     <th className="px-5 py-3 font-medium">Horas</th>
+                    <th className="px-5 py-3 font-medium">Selfie</th>
                     <th className="px-5 py-3 font-medium">Localização</th>
                   </tr>
                 </thead>
@@ -350,6 +352,7 @@ export default function AdminPresencas() {
                             <Etiqueta texto="Presente" tom="verde" />}
                         </td>
                         <td className="whitespace-nowrap px-5 py-3">{formatMin(minutosTrabalhados(p, agoraMs))}</td>
+                        <td className="px-5 py-3"><SelfieLink caminho={(p as unknown as { selfie_caminho?: string | null }).selfie_caminho ?? null} /></td>
                         <td className="px-5 py-3">{localizacao(p.entrada_lat, p.entrada_lng)}</td>
                       </tr>
                     );

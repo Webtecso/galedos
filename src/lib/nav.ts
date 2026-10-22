@@ -2,6 +2,7 @@ import {
   LayoutDashboard, Users, Sparkles, CalendarDays, UserCog, Wallet,
   Landmark, Boxes, FileText, BarChart3, AlertTriangle, Settings, LogOut,
   ClipboardCheck, Clock, HandCoins, KeyRound, Inbox, UserX, ListChecks,
+  Megaphone, Database, User,
   type LucideIcon,
 } from "lucide-react";
 
@@ -19,6 +20,7 @@ export const navItems: NavItem[] = [
   { label: "Ausências", href: "/ausencias", icon: UserX },
   { label: "Meus Ganhos", href: "/meus-ganhos", icon: HandCoins },
   { label: "Pedidos", href: "/pedidos", icon: Inbox },
+  { label: "Avisos", href: "/avisos", icon: Megaphone },
   { label: "Remunerações", href: "/remuneracoes", icon: Wallet },
   { label: "Financeiro", href: "/financas", icon: Landmark },
   { label: "Stock e Equipamentos", href: "/stock", icon: Boxes },
@@ -26,6 +28,8 @@ export const navItems: NavItem[] = [
   { label: "Relatórios", href: "/relatorios", icon: BarChart3 },
   { label: "Ocorrências", href: "/ocorrencias", icon: AlertTriangle },
   { label: "Contas de Acesso", href: "/contas", icon: KeyRound },
+  { label: "Cópia de segurança", href: "/copia", icon: Database },
   { label: "Configurações", href: "/configuracoes", icon: Settings },
+  { label: "A minha conta", href: "/conta", icon: User },
   { label: "Sair", href: "/login", icon: LogOut },
 ];

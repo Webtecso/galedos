@@ -7,6 +7,7 @@ import {
   Scale, Sparkles, UserPlus, Users, Wallet, Wrench, type LucideIcon,
 } from "lucide-react";
 import StatCard from "@/components/ui/StatCard";
+import PedidosPendentes from "@/components/painel/PedidosPendentes";
 import StatusBadge from "@/components/ui/StatusBadge";
 import GraficoReceitas from "@/components/painel/GraficoReceitas";
 import DonutServicos, { type Fatia } from "@/components/painel/DonutServicos";
@@ -108,6 +109,8 @@ export default function PainelPage() {
           </select>
         </div>
       </div>
+
+      <PedidosPendentes />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {podeGerir && <StatCard label="Clientes" value={String(cl.clientes.length)} icon={Users} tom="azul" hint={`+${novosClientes} no período`} />}

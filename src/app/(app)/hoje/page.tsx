@@ -13,6 +13,7 @@ import {
 } from "@/lib/presenca";
 import { formatData } from "@/lib/format";
 import PainelExecucao from "@/components/execucao/PainelExecucao";
+import HojeExtras from "@/components/hoje/HojeExtras";
 
 type Servico = {
   id: string; codigo: string; tipo: string; descricao: string; quantidade: number; data: string; hora: string;
@@ -263,6 +264,8 @@ export default function HojePage() {
       {erro && <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{erro}</p>}
       {aviso && <p className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{aviso}</p>}
 
+      <HojeExtras parte="topo" />
+
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="font-semibold text-slate-900">Presença</h2>
@@ -326,6 +329,8 @@ export default function HojePage() {
           <div className="mb-6 space-y-3">{proximos.map(cartao)}</div>
         </>
       )}
+
+      <HojeExtras parte="fundo" />
 
       {concluidos.length > 0 && (
         <>
