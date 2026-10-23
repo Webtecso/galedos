@@ -29,6 +29,11 @@ export default function LoginPage() {
     const motivo = new URLSearchParams(window.location.search).get("motivo");
     if (motivo === "sem-acesso") setErro("Esta conta não tem acesso à aplicação. Contacte a administração.");
     if (motivo === "senha-alterada") setInfo("Palavra-passe alterada. Já pode entrar com a nova.");
+    const detalhe = new URLSearchParams(window.location.search).get("detalhe") ?? "";
+    if (motivo === "sem-sessao") setErro("A sessão não ficou guardada neste navegador (código: sem-sessao). Verifique se os cookies estão permitidos e tente de novo.");
+    if (motivo === "sem-perfil") setErro("Entrou, mas esta conta não tem perfil na aplicação (código: sem-perfil). Contacte a administração.");
+    if (motivo === "conta-inactiva") setErro("Esta conta está desactivada (código: conta-inactiva). Contacte a administração.");
+    if (motivo === "erro-perfil") setErro("Não foi possível ler o perfil (código: erro-perfil). " + detalhe);
     getSupabase().auth.getSession().then(({ data }: { data: { session: unknown } }) => {
       if (data.session) router.replace("/painel");
     });
